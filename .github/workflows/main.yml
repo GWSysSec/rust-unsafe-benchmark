@@ -1,0 +1,89 @@
+name: Latest stable Rust benchmarks
+
+on:
+  schedule:
+    - cron: '17 8 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: ${{ matrix.benchmark }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        benchmark:
+          - arrayvec
+          - async-task
+          - getrandom
+          - hashbrown
+          - httparse
+          - jni
+          - jpeg-decoder-master
+          - matrixmultiply
+          - memchr
+          - ndarray
+          - parking_lot
+          - petgraph
+          - rayon
+          - semver
+          - simd-json
+          - ring
+          - smallvec
+          - tokio
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install latest stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Java for JNI benchmarks
+        if: matrix.benchmark == 'jni'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run benchmark suite
+        env:
+          BENCHMARK: ${{ matrix.benchmark }}
+        run: |
+          case "$BENCHMARK" in
+            memchr)
+              cargo build --release --locked --manifest-path rebar/Cargo.toml
+              cd rebar
+              ./target/release/rebar build -e 'rust/memchr/memmem/(prebuilt)'
+              ./target/release/rebar measure -e 'rust/memchr/memmem/(prebuilt)'
+              ;;
+            rayon)
+              cargo run --release --locked \
+                --manifest-path rayon/rayon-demo/Cargo.toml -- \
+                nbody bench --bodies 500
+              ;;
+            jni)
+              cargo bench --locked --features invocation \
+                --manifest-path jni/Cargo.toml
+              ;;
+            parking_lot)
+              cargo run --release --locked \
+                --manifest-path parking_lot/benchmark/Cargo.toml \
+                --bin mutex -- 2 4 10 2 4
+              cargo run --release --locked \
+                --manifest-path parking_lot/benchmark/Cargo.toml \
+                --bin rwlock -- 4 4 4 10 2 4
+              ;;
+            ring)
+              cargo bench --locked --benches --manifest-path ring/Cargo.toml
+              ;;
+            *)
+              cargo bench --locked --manifest-path "$BENCHMARK/Cargo.toml"
+              ;;
+          esac
