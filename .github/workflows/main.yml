@@ -1,4 +1,4 @@
-name: Latest stable Rust benchmarks
+name: Benchmark with current Rust
 
 on:
   schedule:
@@ -13,37 +13,58 @@ jobs:
     name: ${{ matrix.benchmark }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      RUSTUP_TOOLCHAIN: stable
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        benchmark:
-          - arrayvec
-          - async-task
-          - getrandom
-          - hashbrown
-          - httparse
-          - jni
-          - jpeg-decoder-master
-          - matrixmultiply
-          - memchr
-          - ndarray
-          - parking_lot
-          - petgraph
-          - rayon
-          - semver
-          - simd-json
-          - ring
-          - smallvec
-          - tokio
+        include:
+          - benchmark: arrayvec
+            channel: stable
+          - benchmark: async-task
+            channel: nightly
+          - benchmark: getrandom
+            channel: stable
+          - benchmark: hashbrown
+            channel: nightly
+          - benchmark: httparse
+            channel: stable
+          - benchmark: jni
+            channel: nightly
+          - benchmark: jpeg-decoder-master
+            channel: stable
+          - benchmark: matrixmultiply
+            channel: stable
+          - benchmark: memchr
+            channel: stable
+          - benchmark: ndarray
+            channel: nightly
+          - benchmark: parking_lot
+            channel: stable
+          - benchmark: petgraph
+            channel: nightly
+          - benchmark: rayon
+            channel: stable
+          - benchmark: semver
+            channel: nightly
+          - benchmark: simd-json
+            channel: stable
+          - benchmark: ring
+            channel: stable
+          - benchmark: smallvec
+            channel: nightly
+          - benchmark: tokio
+            channel: stable
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install latest stable Rust
+        if: matrix.channel == 'stable'
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install latest nightly Rust
+        if: matrix.channel == 'nightly'
+        uses: dtolnay/rust-toolchain@nightly
 
       - name: Install Java for JNI benchmarks
         if: matrix.benchmark == 'jni'
@@ -55,6 +76,7 @@ jobs:
       - name: Run benchmark suite
         env:
           BENCHMARK: ${{ matrix.benchmark }}
+          RUSTUP_TOOLCHAIN: ${{ matrix.channel }}
         run: |
           case "$BENCHMARK" in
             memchr)
