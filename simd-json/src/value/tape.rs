@@ -1,10 +1,12 @@
 /// A tape of a parsed json, all values are extracted and validated and
 /// can be used without further computation.
-use value_trait::{base::TypedValue as _, StaticNode, TryTypeError, ValueType};
+use value_trait::{StaticNode, TryTypeError, ValueType, base::TypedValue as _};
 
-pub(super) mod array;
+/// Tape `Array` and its iterator
+pub mod array;
 mod cmp;
-pub(super) mod object;
+/// Tape `Object` and its iterators
+pub mod object;
 mod trait_impls;
 #[derive(Debug)]
 /// `Tape`
@@ -44,10 +46,7 @@ impl<'input> Tape<'input> {
     {
         use crate::Deserializer;
 
-        let mut deserializer = Deserializer {
-            tape: self.0,
-            idx: 0,
-        };
+        let mut deserializer = Deserializer::from_tape(self);
 
         T::deserialize(&mut deserializer)
     }
@@ -195,7 +194,6 @@ impl<'input> Node<'input> {
 mod test {
     #![allow(clippy::cognitive_complexity)]
     use super::StaticNode as Value;
-    use super::*;
     use crate::prelude::*;
 
     #[test]

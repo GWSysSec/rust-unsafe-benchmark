@@ -1,15 +1,17 @@
+use crate::Deserializer;
+use crate::InputView;
+use crate::Result;
+use crate::SillyWrapper;
 use crate::error::ErrorType;
 use crate::impls::neon::stage1::bit_mask;
 use crate::safer_unchecked::GetSaferUnchecked;
-use crate::stringparse::{handle_unicode_codepoint, ESCAPE_MAP};
-use crate::Deserializer;
-use crate::Result;
-use crate::SillyWrapper;
+use crate::stringparse::{ESCAPE_MAP, handle_unicode_codepoint};
 
 use std::arch::aarch64::{
     uint8x16_t, vandq_u8, vceqq_u8, vgetq_lane_u32, vld1q_u8, vmovq_n_u8, vpaddq_u8,
     vreinterpretq_u32_u8,
 };
+use std::mem::MaybeUninit;
 
 #[cfg_attr(not(feature = "no-inline"), inline)]
 fn find_bs_bits_and_quote_bits(v0: uint8x16_t, v1: uint8x16_t) -> (u32, u32) {
@@ -42,10 +44,10 @@ fn find_bs_bits_and_quote_bits(v0: uint8x16_t, v1: uint8x16_t) -> (u32, u32) {
 
 #[allow(clippy::if_not_else, clippy::too_many_lines)]
 #[cfg_attr(not(feature = "no-inline"), inline)]
-pub(crate) fn parse_str<'invoke, 'de>(
+pub(crate) fn parse_str<'de>(
     input: SillyWrapper<'de>,
-    data: &'invoke [u8],
-    buffer: &'invoke mut [u8],
+    data: InputView,
+    buffer: &mut [MaybeUninit<u8>],
     mut idx: usize,
 ) -> Result<&'de str> {
     use ErrorType::{InvalidEscape, InvalidUnicodeCodepoint};
@@ -59,7 +61,7 @@ pub(crate) fn parse_str<'invoke, 'de>(
     // This is safe since we check sub's length in the range access above and only
     // create sub sliced form sub to `sub.len()`.
 
-    let src: &[u8] = unsafe { data.get_kinda_unchecked(idx..) };
+    let src: &[u8] = unsafe { data.tail(idx) };
     let mut src_i: usize = 0;
     let mut len = src_i;
     loop {
@@ -121,9 +123,12 @@ pub(crate) fn parse_str<'invoke, 'de>(
         };
 
         unsafe {
+            // TODO: this should use `write_copy_of_slice` on Rust 1.93+
             buffer
                 .get_kinda_unchecked_mut(dst_i..dst_i + 32)
-                .copy_from_slice(src.get_kinda_unchecked(src_i..src_i + 32));
+                .as_mut_ptr()
+                .cast::<u8>()
+                .copy_from_nonoverlapping(src.get_kinda_unchecked(src_i..src_i + 32).as_ptr(), 32);
         }
 
         // store to dest unconditionally - we can overwrite the bits we don't like
@@ -147,7 +152,7 @@ pub(crate) fn parse_str<'invoke, 'de>(
             unsafe {
                 input
                     .add(idx + len)
-                    .copy_from_nonoverlapping(buffer.as_ptr(), dst_i);
+                    .copy_from_nonoverlapping(buffer.as_ptr().cast::<u8>(), dst_i);
                 let v = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
                     input.add(idx),
                     len + dst_i,
@@ -168,15 +173,11 @@ pub(crate) fn parse_str<'invoke, 'de>(
                 // within the unicode codepoint handling code.
                 src_i += bs_dist as usize;
                 dst_i += bs_dist as usize;
-                let (o, s) = if let Ok(r) =
+                let Ok((o, s)) =
                     handle_unicode_codepoint(unsafe { src.get_kinda_unchecked(src_i..) }, unsafe {
                         buffer.get_kinda_unchecked_mut(dst_i..)
-                    }) {
-                    r
-                } else {
-                    return Err(Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint));
-                };
-                if o == 0 {
+                    })
+                else {
                     return Err(Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint));
                 };
                 // We moved o steps forward at the destination and 6 on the source
@@ -197,7 +198,9 @@ pub(crate) fn parse_str<'invoke, 'de>(
                     ));
                 }
                 unsafe {
-                    *buffer.get_kinda_unchecked_mut(dst_i + bs_dist as usize) = escape_result;
+                    buffer
+                        .get_kinda_unchecked_mut(dst_i + bs_dist as usize)
+                        .write(escape_result);
                 }
                 src_i += bs_dist as usize + 2;
                 dst_i += bs_dist as usize + 1;

@@ -10,7 +10,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[cfg(feature = "bench-serde")]
 use serde_json;
 
-use criterion::{criterion_group, BatchSize, Criterion, Throughput};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group};
 use simd_json::Buffers;
 
 use std::fs::File;
@@ -24,13 +24,13 @@ fn to_borrowed_value_with_buffers(data: &mut [u8], buffers: &mut Buffers) {
     simd_json::to_borrowed_value_with_buffers(data, buffers).unwrap();
 }
 
-fn to_owned_value(data: &mut [u8]) {
-    simd_json::to_owned_value(data).unwrap();
+fn to_owned_value(data: &mut [u8]) -> simd_json::OwnedValue {
+    simd_json::to_owned_value(data).unwrap()
 }
 
 #[cfg(feature = "bench-serde")]
-fn serde_from_slice(data: &[u8]) {
-    let _: serde_json::Value = serde_json::from_slice(data).unwrap();
+fn serde_from_slice(data: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(data).unwrap()
 }
 
 macro_rules! bench_file {
@@ -54,9 +54,9 @@ macro_rules! bench_file {
             let mut buffers = Buffers::default();
 
             group.bench_with_input("simd_json::to_borrowed_value", &vec, |b, data| {
-                b.iter_batched(
+                b.iter_batched_ref(
                     || data.clone(),
-                    |mut bytes| to_borrowed_value(&mut bytes),
+                    |bytes| to_borrowed_value(bytes),
                     BatchSize::SmallInput,
                 )
             });
@@ -65,29 +65,25 @@ macro_rules! bench_file {
                 "simd_json::to_borrowed_value_with_buffers",
                 &vec,
                 |b, data| {
-                    b.iter_batched(
+                    b.iter_batched_ref(
                         || data.clone(),
-                        |mut bytes| to_borrowed_value_with_buffers(&mut bytes, &mut buffers),
+                        |bytes| to_borrowed_value_with_buffers(bytes, &mut buffers),
                         BatchSize::SmallInput,
                     )
                 },
             );
 
             group.bench_with_input("simd_json::to_owned_value", &vec, |b, data| {
-                b.iter_batched(
+                b.iter_batched_ref(
                     || data.clone(),
-                    |mut bytes| to_owned_value(&mut bytes),
+                    |bytes| to_owned_value(bytes),
                     BatchSize::SmallInput,
                 )
             });
 
             #[cfg(feature = "bench-serde")]
             group.bench_with_input("serde_json::from_slice", &vec, |b, data| {
-                b.iter_batched(
-                    || data,
-                    |bytes| serde_from_slice(&bytes),
-                    BatchSize::SmallInput,
-                )
+                b.iter_with_large_drop(|| serde_from_slice(data))
             });
         }
     };

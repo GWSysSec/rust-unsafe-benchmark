@@ -6,19 +6,28 @@ mod approx;
 
 use crate::safer_unchecked::GetSaferUnchecked;
 
-#[cfg(all(target_arch = "x86", feature = "swar-number-parsing"))]
+#[cfg(all(
+    target_arch = "x86",
+    target_feature = "ssse3",
+    feature = "swar-number-parsing"
+))]
 use std::arch::x86 as arch;
 
-#[cfg(all(target_arch = "x86_64", feature = "swar-number-parsing"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "ssse3",
+    feature = "swar-number-parsing"
+))]
 use std::arch::x86_64 as arch;
 
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "ssse3",
     feature = "swar-number-parsing"
 ))]
 use arch::{
     __m128i, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_madd_epi16, _mm_maddubs_epi16,
-    _mm_packus_epi32, _mm_set1_epi8, _mm_setr_epi16, _mm_setr_epi8, _mm_sub_epi8,
+    _mm_packus_epi32, _mm_set1_epi8, _mm_setr_epi8, _mm_setr_epi16, _mm_sub_epi8,
 };
 
 #[cfg_attr(not(feature = "no-inline"), inline)]
@@ -75,14 +84,16 @@ fn is_made_of_eight_digits_fast(chars: [u8; 8]) -> bool {
 #[cfg_attr(not(feature = "no-inline"), inline)]
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
-    feature = "swar-number-parsing"
+    target_feature = "ssse3",
+    feature = "swar-number-parsing",
 ))]
+#[target_feature(enable = "ssse3")]
 #[allow(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
     clippy::cast_ptr_alignment
 )]
-fn parse_eight_digits_unrolled(chars: &[u8]) -> u32 {
+unsafe fn parse_eight_digits_ssse3(chars: &[u8]) -> u32 {
     unsafe {
         // this actually computes *16* values so we are being wasteful.
         let ascii0: __m128i = _mm_set1_epi8(b'0' as i8);
@@ -109,15 +120,33 @@ fn parse_eight_digits_unrolled(chars: &[u8]) -> u32 {
 }
 
 #[cfg_attr(not(feature = "no-inline"), inline)]
-#[cfg(all(
-    not(any(target_arch = "x86", target_arch = "x86_64")),
-    feature = "swar-number-parsing"
-))]
+#[cfg(feature = "swar-number-parsing")]
 #[allow(clippy::cast_ptr_alignment)]
-fn parse_eight_digits_unrolled(chars: &[u8]) -> u32 {
-    let val = unsafe { chars.as_ptr().cast::<u64>().read_unaligned() }; //    memcpy(&val, chars, sizeof(u64));
+fn parse_eight_digits_swar(chars: &[u8]) -> u32 {
+    // The SWAR reduction below assumes the eight digit bytes are laid out
+    // least-significant-first, so interpret the input little-endian on every
+    // target (a no-op on little-endian, a byte swap on big-endian like s390x).
+    let val = u64::from_le(unsafe { chars.as_ptr().cast::<u64>().read_unaligned() });
     let val = (val & 0x0F0F_0F0F_0F0F_0F0F).wrapping_mul(2561) >> 8;
     let val = (val & 0x00FF_00FF_00FF_00FF).wrapping_mul(6_553_601) >> 16;
 
     ((val & 0x0000_FFFF_0000_FFFF).wrapping_mul(42_949_672_960_001) >> 32) as u32
+}
+
+#[cfg(feature = "swar-number-parsing")]
+#[cfg_attr(not(feature = "no-inline"), inline)]
+fn parse_eight_digits_unrolled(chars: &[u8]) -> u32 {
+    // Only use the SSSE3 version when the feature is statically available:
+    // a per-call `is_x86_feature_detected!` check costs more than the SWAR
+    // fallback (cached-atomic load + two outlined `target_feature` calls per
+    // 8-digit group).
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "ssse3"
+    ))]
+    {
+        return unsafe { parse_eight_digits_ssse3(chars) };
+    }
+    #[allow(unreachable_code)]
+    parse_eight_digits_swar(chars)
 }

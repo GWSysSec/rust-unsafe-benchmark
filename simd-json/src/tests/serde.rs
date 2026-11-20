@@ -3,18 +3,110 @@
     clippy::non_ascii_literal,
     clippy::ignored_unit_patterns
 )]
-#[cfg(not(target_arch = "wasm32"))]
-use crate::{deserialize, OwnedValue};
 use crate::{
-    owned::{to_value, Object, Value},
+    Deserializer,
+    owned::{Object, Value, to_value},
     prelude::*,
     serde::from_slice,
     to_borrowed_value, to_owned_value,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{OwnedValue, deserialize};
 use halfbrown::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use proptest::prelude::*;
 use serde::Deserialize;
+use serde_ext::Serialize;
+
+static JSON: &str = r#"{
+    "code": 200,
+    "success": true,
+    "payload": {
+        "features": [
+            "serde",
+            "json"
+        ]
+    }
+}"#;
+
+#[derive(Deserialize, PartialEq, Debug)]
+struct TestPayload {
+    features: Vec<String>,
+}
+
+#[derive(Deserialize, PartialEq, Debug)]
+struct TestEnvelope {
+    code: usize,
+    success: bool,
+    payload: TestPayload,
+}
+
+#[cfg(feature = "big-int-as-float")]
+#[test]
+fn min_i64_minus_one() {
+    let mut d = String::from(r#"{"my_value": -9223372036854775809}"#);
+    let d = unsafe { d.as_bytes_mut() };
+    let v_serde: serde_json::Value = serde_json::from_slice(d).expect("serde_json failed");
+    let v_simd: serde_json::Value = from_slice(d).expect("simd_json failed");
+    assert_eq!(v_simd, v_serde);
+}
+
+#[test]
+fn test_deser_to_value() {
+    let mut json = JSON.as_bytes().to_vec();
+    let d = Deserializer::from_slice(&mut json).expect("Invalid JSON");
+
+    let original_index = d.idx;
+    let original_nodes = d.tape.len();
+
+    let v = d.as_value();
+
+    assert!(v.contains_key("payload"), "Failed to find payload key");
+    let v = v.get("payload").expect("Can't get payload");
+    assert!(v.is_object(), "payload not recognized as object: {v:?}");
+    assert!(v.contains_key("features"), "Failed to find features key");
+    let v = v.get("features").expect("can't get features");
+    assert!(v.is_array(), "features not recognized as array: {v:?}");
+
+    // proving that value peeking doesn't affect the deserializer
+
+    assert_eq!(
+        original_index, d.idx,
+        "Deserializer has been internally modified"
+    );
+    assert_eq!(
+        original_nodes,
+        d.tape.len(),
+        "Deserializer has been internally modified"
+    );
+}
+
+#[test]
+fn test_deser_restart() {
+    let mut json = JSON.as_bytes().to_vec();
+    let mut d = Deserializer::from_slice(&mut json).expect("Invalid JSON");
+
+    let original_index = d.idx;
+    let original_nodes = d.tape.len();
+
+    let test1 = TestEnvelope::deserialize(&mut d).expect("Deserialization failed");
+
+    assert!(
+        original_index != d.idx,
+        "Deserializer has NOT been internally modified"
+    );
+    assert_eq!(
+        original_nodes,
+        d.tape.len(),
+        "Deserializer nodes are NOT intact"
+    );
+
+    d.restart();
+
+    let test2 = TestEnvelope::deserialize(&mut d).expect("Deserialization failed");
+
+    assert_eq!(test2, test1, "Deserializer is not idempotent");
+}
 
 #[test]
 fn empty() {
@@ -503,8 +595,7 @@ fn float1() {
     assert_eq!(v_simd, v_serde);
 }
 
-// We ignore this since serde is less precise on this test
-#[ignore]
+#[ignore = "We ignore this since serde is less precise on this test"]
 #[test]
 fn float2() {
     let mut d = String::from("-4.5512678569607477e306");
@@ -522,6 +613,35 @@ fn float3() {
     let v_serde: serde_json::Number = serde_json::from_slice(d).expect("serde_json");
     let v_simd: serde_json::Number = from_slice(d).expect("simd_json");
     assert_eq!(v_simd, v_serde);
+}
+
+// https://github.com/simd-lite/simd-json/issues/455
+// Float parsing was corrupted when a long decimal number extended >= 13 bytes
+// past a 64-byte SIMD chunk boundary.
+#[test]
+fn float_across_chunk_boundary() {
+    // "3077999.0000000000000000" (24 bytes) starts at byte offset 56;
+    // 8 bytes are in chunk 0, the remaining 16 spill into chunk 1.
+    let json: &[u8] =
+        br#"{"asks":[{"price":3077990.0,"amount":0.111111},{"price":3077999.0000000000000000,"amount":0.5}]}"#;
+    assert_eq!(&json[56..80], b"3077999.0000000000000000");
+    let mut d = json.to_vec();
+    let v_serde: serde_json::Value = serde_json::from_slice(json).expect("serde_json");
+    let v_simd: serde_json::Value = from_slice(&mut d).expect("simd_json");
+    assert_eq!(v_simd, v_serde);
+
+    // Sweep the number start offset within the 64-byte chunk to cover every
+    // possible boundary split of the 24-byte number.
+    for pad in 0..64 {
+        let json = format!(
+            r#"{{"pad":"{}","price":3077999.0000000000000000,"amount":0.5}}"#,
+            "x".repeat(pad)
+        );
+        let mut d = json.clone().into_bytes();
+        let v_serde: serde_json::Value = serde_json::from_str(&json).expect("serde_json");
+        let v_simd: serde_json::Value = from_slice(&mut d).expect("simd_json");
+        assert_eq!(v_simd, v_serde, "mismatch at pad {pad}");
+    }
 }
 
 #[test]
@@ -675,7 +795,9 @@ fn obj4() {
 
 #[test]
 fn vecvec() {
-    let mut d = String::from("[[[-65.613616999999977,43.420273000000009], [-65.613616999999977,43.420273000000009]], [[-65.613616999999977,43.420273000000009], [-65.613616999999977,43.420273000000009]]]");
+    let mut d = String::from(
+        "[[[-65.613616999999977,43.420273000000009], [-65.613616999999977,43.420273000000009]], [[-65.613616999999977,43.420273000000009], [-65.613616999999977,43.420273000000009]]]",
+    );
     let d = unsafe { d.as_bytes_mut() };
     let v_serde: Vec<Vec<(f32, f32)>> = serde_json::from_slice(d).expect("serde_json");
     let v_simd: Vec<Vec<(f32, f32)>> = from_slice(d).expect("simd_json");
@@ -870,6 +992,34 @@ fn invalid_float() {
     assert!(to_owned_value(&mut s).is_err());
 }
 
+#[test]
+fn zero_element_touple() {
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    pub enum FullEnum {
+        DoubeEmptyTuple(u8, u8),
+        SingeEmptyTuple(u8),
+        EmptyTuple(),
+        Nothing,
+    }
+
+    assert_eq!(
+        crate::serde::to_string(&FullEnum::DoubeEmptyTuple(42, 23)).expect("serde"),
+        r#"{"DoubeEmptyTuple":[42,23]}"#
+    );
+    assert_eq!(
+        crate::serde::to_string(&FullEnum::SingeEmptyTuple(42)).expect("serde"),
+        r#"{"SingeEmptyTuple":42}"#
+    );
+    assert_eq!(
+        crate::serde::to_string(&FullEnum::EmptyTuple()).expect("serde"),
+        r#"{"EmptyTuple":[]}"#
+    );
+    assert_eq!(
+        crate::serde::to_string(&FullEnum::Nothing).expect("serde"),
+        r#""Nothing""#
+    );
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 proptest! {
     #![proptest_config(ProptestConfig {
@@ -957,5 +1107,474 @@ proptest! {
         to_borrowed_value(d2).expect("to_borrowed_value");
         to_owned_value(d3).expect("to_owned_value");
 
+    }
+}
+
+// Regression test for the `next_value_seed` unchecked-index hole: a safe,
+// hand-written `Visitor` that calls `next_value_seed` more often than the map
+// has entries (without calling `next_key_seed`) must get an error back — not
+// drive the tape index out of bounds (debug: index panic, release: UB through
+// `get_unchecked`).
+#[test]
+fn overdriven_next_value_seed_errors_instead_of_oob() {
+    use serde_ext::de::{self, MapAccess, Visitor};
+    use std::fmt;
+
+    struct Evil;
+    impl<'de> de::Deserialize<'de> for Evil {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            struct EvilVisitor;
+            impl<'de> Visitor<'de> for EvilVisitor {
+                type Value = Evil;
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("a map")
+                }
+                fn visit_map<A>(self, mut map: A) -> Result<Evil, A::Error>
+                where
+                    A: MapAccess<'de>,
+                {
+                    for _ in 0..1024 {
+                        map.next_value::<u64>()?;
+                    }
+                    Ok(Evil)
+                }
+            }
+            deserializer.deserialize_map(EvilVisitor)
+        }
+    }
+
+    let mut input = b"{}".to_vec();
+    assert!(from_slice::<Evil>(&mut input).is_err());
+}
+
+/// Reproduction for <https://github.com/simd-lite/simd-json/issues/471>:
+/// re-entering a `Deserializer` whose tape is already exhausted must return an
+/// error instead of performing an out of bounds read on the tape.
+#[test]
+fn exhausted_deserializer_errors_instead_of_oob() {
+    let mut data = b"123".to_vec();
+    let mut de = Deserializer::from_slice(&mut data).expect("failed to build deserializer");
+
+    assert_eq!(u8::deserialize(&mut de).expect("first read"), 123);
+    // the tape is consumed now, every further read has to fail cleanly
+    assert!(u8::deserialize(&mut de).is_err());
+    assert!(u16::deserialize(&mut de).is_err());
+    assert!(u32::deserialize(&mut de).is_err());
+    assert!(u64::deserialize(&mut de).is_err());
+    assert!(i8::deserialize(&mut de).is_err());
+    assert!(i16::deserialize(&mut de).is_err());
+    assert!(i32::deserialize(&mut de).is_err());
+    assert!(i64::deserialize(&mut de).is_err());
+    assert!(f64::deserialize(&mut de).is_err());
+    assert!(f32::deserialize(&mut de).is_err());
+}
+
+/// A visitor that walks the tape past the end via the key side of `MapAccess`
+/// must error instead of reading out of bounds, see
+/// <https://github.com/simd-lite/simd-json/issues/471>.
+#[test]
+fn overdriven_next_key_seed_errors_instead_of_oob() {
+    use serde_ext::de::{self, MapAccess, Visitor};
+    use std::fmt;
+
+    struct Evil;
+    impl<'de> de::Deserialize<'de> for Evil {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            struct EvilVisitor;
+            impl<'de> Visitor<'de> for EvilVisitor {
+                type Value = Evil;
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("a map")
+                }
+                fn visit_map<A>(self, mut map: A) -> Result<Evil, A::Error>
+                where
+                    A: MapAccess<'de>,
+                {
+                    // burn both the key and the value through the value side,
+                    // then ask for a key that no longer exists
+                    map.next_value::<String>()?;
+                    map.next_value::<u64>()?;
+                    // an integer key takes `MapKey`'s unchecked tape read
+                    map.next_key::<u64>()?;
+                    Ok(Evil)
+                }
+            }
+            deserializer.deserialize_map(EvilVisitor)
+        }
+    }
+
+    let mut input = br#"{"a":1}"#.to_vec();
+    assert!(from_slice::<Evil>(&mut input).is_err());
+}
+
+#[test]
+fn value_fixed_length_sequences_reject_extra_elements() {
+    // From a Value, a tuple/array/struct visitor that stops early used to leave the rest of the
+    // array unread without error: `[1,2,3]` as `(u8, u8)` gave `(1, 2)`.
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Pair(u8, u8);
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Named {
+        a: u8,
+    }
+    let mut d = b"[1,2,3]".to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    let mut d2 = b"[1,2,3]".to_vec();
+    let b = to_borrowed_value(&mut d2).expect("valid");
+    assert!(from_owned_value::<(u8, u8)>(o.clone()).is_err());
+    assert!(from_refowned_value::<[u8; 2]>(&o).is_err());
+    assert!(from_borrowed_value::<Pair>(b.clone()).is_err());
+    assert!(from_refborrowed_value::<Named>(&b).is_err());
+    assert!(from_owned_value::<Named>(o.clone()).is_err());
+    // exact length and Vec are unchanged; fewer elements still an error
+    assert_eq!(from_refowned_value::<Vec<u8>>(&o).ok(), Some(vec![1, 2, 3]));
+    assert_eq!(
+        from_owned_value::<(u8, u8, u8)>(o.clone()).ok(),
+        Some((1, 2, 3))
+    );
+    assert!(from_owned_value::<(u8, u8, u8, u8)>(o).is_err());
+}
+
+#[test]
+fn value_struct_variant_from_sequence() {
+    // A struct variant written as a sequence deserializes from text; from a Value it failed with
+    // Unexpected(Object, Array).
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    #[derive(Deserialize, Debug, PartialEq)]
+    enum E {
+        S { a: u8, b: String },
+    }
+    let expected = E::S {
+        a: 5,
+        b: "k".to_string(),
+    };
+    let mut d = br#"{"S":[5,"k"]}"#.to_vec();
+    assert_eq!(
+        from_slice::<E>(&mut d).ok(),
+        Some(E::S {
+            a: 5,
+            b: "k".to_string()
+        })
+    );
+    let mut d = br#"{"S":[5,"k"]}"#.to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    assert_eq!(
+        from_owned_value::<E>(o.clone()).ok(),
+        Some(E::S {
+            a: 5,
+            b: "k".to_string()
+        })
+    );
+    assert_eq!(
+        from_refowned_value::<E>(&o).ok(),
+        Some(E::S {
+            a: 5,
+            b: "k".to_string()
+        })
+    );
+    let mut d = br#"{"S":[5,"k"]}"#.to_vec();
+    let b = to_borrowed_value(&mut d).expect("valid");
+    assert_eq!(
+        from_borrowed_value::<E>(b.clone()).ok(),
+        Some(E::S {
+            a: 5,
+            b: "k".to_string()
+        })
+    );
+    assert_eq!(from_refborrowed_value::<E>(&b).ok(), Some(expected));
+    for bad in [&br#"{"S":[5]}"#[..], br#"{"S":[5,"k",1]}"#] {
+        let mut d = bad.to_vec();
+        let o = to_owned_value(&mut d).expect("valid");
+        assert!(from_owned_value::<E>(o.clone()).is_err());
+        assert!(from_refowned_value::<E>(&o).is_err());
+    }
+}
+
+#[test]
+fn value_tuple_variant_from_sequence() {
+    // A tuple variant from a Value reads exactly its elements: extra elements are an error.
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    #[derive(Deserialize, Debug, PartialEq)]
+    enum E {
+        Tpl(u8, u8),
+    }
+    let mut d = br#"{"Tpl":[1,2]}"#.to_vec();
+    assert_eq!(from_slice::<E>(&mut d).ok(), Some(E::Tpl(1, 2)));
+    let mut d = br#"{"Tpl":[1,2]}"#.to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    assert_eq!(from_refowned_value::<E>(&o).ok(), Some(E::Tpl(1, 2)));
+    assert_eq!(from_owned_value::<E>(o).ok(), Some(E::Tpl(1, 2)));
+
+    let mut d = br#"{"Tpl":[1,2]}"#.to_vec();
+    let b = to_borrowed_value(&mut d).expect("valid");
+    assert_eq!(from_refborrowed_value::<E>(&b).ok(), Some(E::Tpl(1, 2)));
+    assert_eq!(from_borrowed_value::<E>(b).ok(), Some(E::Tpl(1, 2)));
+
+    for bad in [&br#"{"Tpl":[]}"#[..], br#"{"Tpl":[1,2,3]}"#] {
+        let mut d = bad.to_vec();
+        let o = to_owned_value(&mut d).expect("valid");
+        let mut d2 = bad.to_vec();
+        let b = to_borrowed_value(&mut d2).expect("valid");
+        assert!(from_owned_value::<E>(o.clone()).is_err());
+        assert!(from_refowned_value::<E>(&o).is_err());
+        assert!(from_borrowed_value::<E>(b.clone()).is_err());
+        assert!(from_refborrowed_value::<E>(&b).is_err());
+    }
+}
+
+#[test]
+fn value_tuple_variant_empty() {
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum E {
+        T(),
+        Unit,
+    }
+
+    assert_eq!(
+        serde_json::from_str::<E>(r#"{"T":[]}"#).expect("serde_json"),
+        E::T()
+    );
+    let mut d = br#"{"T":[]}"#.to_vec();
+    assert_eq!(from_slice::<E>(&mut d).expect("from_slice"), E::T());
+
+    for (json, expected) in [(r#"{"T":[]}"#, E::T()), (r#""Unit""#, E::Unit)] {
+        let mut d = json.as_bytes().to_vec();
+        let o = to_owned_value(&mut d).expect("valid");
+        assert_eq!(
+            from_refowned_value::<E>(&o).expect("from_refowned_value"),
+            expected
+        );
+        assert_eq!(
+            from_owned_value::<E>(o).expect("from_owned_value"),
+            expected
+        );
+        let mut d = json.as_bytes().to_vec();
+        let b = to_borrowed_value(&mut d).expect("valid");
+        assert_eq!(
+            from_refborrowed_value::<E>(&b).expect("from_refborrowed_value"),
+            expected
+        );
+        assert_eq!(
+            from_borrowed_value::<E>(b).expect("from_borrowed_value"),
+            expected
+        );
+    }
+
+    let o = crate::serde::to_owned_value(E::T()).expect("to_owned_value");
+    let mut d = br#"{"T":[]}"#.to_vec();
+    assert_eq!(o, to_owned_value(&mut d).expect("valid"));
+    assert_eq!(
+        from_refowned_value::<E>(&o).expect("from_refowned_value"),
+        E::T()
+    );
+    assert_eq!(from_owned_value::<E>(o).expect("from_owned_value"), E::T());
+    let b = crate::serde::to_borrowed_value(E::T()).expect("to_borrowed_value");
+    let mut d = br#"{"T":[]}"#.to_vec();
+    assert_eq!(b, to_borrowed_value(&mut d).expect("valid"));
+    assert_eq!(
+        from_refborrowed_value::<E>(&b).expect("from_refborrowed_value"),
+        E::T()
+    );
+    assert_eq!(
+        from_borrowed_value::<E>(b).expect("from_borrowed_value"),
+        E::T()
+    );
+
+    for bad in [
+        r#"{"T":[1]}"#,
+        r#"{"T":null}"#,
+        r#"{"T":1}"#,
+        r#"{"T":{}}"#,
+        r#""T""#,
+    ] {
+        let mut d = bad.as_bytes().to_vec();
+        let o = to_owned_value(&mut d).expect("valid");
+        assert!(from_refowned_value::<E>(&o).is_err());
+        assert!(from_owned_value::<E>(o).is_err());
+        let mut d = bad.as_bytes().to_vec();
+        let b = to_borrowed_value(&mut d).expect("valid");
+        assert!(from_refborrowed_value::<E>(&b).is_err());
+        assert!(from_borrowed_value::<E>(b).is_err());
+    }
+}
+
+#[test]
+fn fixed_length_sequences_reject_extra_elements() {
+    // A tuple, array or tuple struct reads only as many elements as it has. The rest of the
+    // array used to stay on the tape and be read as the values after it: `[[1,2,3],4]` as
+    // `((u8, u8), u8)` gave `((1, 2), 3)`. Extra elements are an error, as in serde_json.
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Pair(u8, u8);
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Named {
+        a: u8,
+    }
+
+    let mut d = b"[[1,2,3],4]".to_vec();
+    assert!(from_slice::<((u8, u8), u8)>(&mut d).is_err());
+    let mut d = b"[1,[2,99,98],3]".to_vec();
+    assert!(from_slice::<(u8, (u8,), u8)>(&mut d).is_err());
+    let mut d = b"[[1,2,[9,9]],[4,5]]".to_vec();
+    assert!(from_slice::<Vec<(u8, u8)>>(&mut d).is_err());
+    let mut d = b"[1,2,3]".to_vec();
+    assert!(from_slice::<[u8; 2]>(&mut d).is_err());
+    let mut d = b"[1,2,3]".to_vec();
+    assert!(from_slice::<Pair>(&mut d).is_err());
+    let mut d = b"[1,2]".to_vec();
+    assert!(from_slice::<Named>(&mut d).is_err());
+    let mut d = br#"{"a":[1,2,3],"b":[4,5]}"#.to_vec();
+    assert!(from_slice::<std::collections::BTreeMap<String, (u8, u8)>>(&mut d).is_err());
+
+    // exact lengths, and sequences of any length, are unchanged
+    let mut d = b"[[1,2],3]".to_vec();
+    assert_eq!(from_slice::<((u8, u8), u8)>(&mut d).ok(), Some(((1, 2), 3)));
+    let mut d = b"[1,2]".to_vec();
+    assert_eq!(from_slice::<Pair>(&mut d).ok(), Some(Pair(1, 2)));
+    let mut d = b"[1]".to_vec();
+    assert_eq!(from_slice::<Named>(&mut d).ok(), Some(Named { a: 1 }));
+    let mut d = b"[[1,2,3],[4]]".to_vec();
+    assert_eq!(
+        from_slice::<Vec<Vec<u8>>>(&mut d).ok(),
+        Some(vec![vec![1, 2, 3], vec![4]])
+    );
+    // fewer elements is still an error
+    let mut d = b"[1]".to_vec();
+    assert!(from_slice::<(u8, u8)>(&mut d).is_err());
+}
+
+#[test]
+fn tuple_variants_reject_extra_elements() {
+    // A tuple variant's array is a fixed-length sequence too, from text and from every Value.
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    #[derive(Deserialize, Debug, PartialEq)]
+    enum Enm {
+        Var(u8, u8),
+    }
+    let mut d = br#"{"Var":[1,2,3]}"#.to_vec();
+    assert!(from_slice::<Enm>(&mut d).is_err());
+    let mut d = br#"[{"Var":[1,2,3]},{"Var":[4,5]}]"#.to_vec();
+    assert!(from_slice::<Vec<Enm>>(&mut d).is_err());
+
+    let mut d = br#"{"Var":[1,2,3]}"#.to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    let mut d2 = br#"{"Var":[1,2,3]}"#.to_vec();
+    let b = to_borrowed_value(&mut d2).expect("valid");
+    assert!(from_owned_value::<Enm>(o.clone()).is_err());
+    assert!(from_refowned_value::<Enm>(&o).is_err());
+    assert!(from_borrowed_value::<Enm>(b.clone()).is_err());
+    assert!(from_refborrowed_value::<Enm>(&b).is_err());
+
+    // exact length is unchanged
+    let mut d = br#"{"Var":[1,2]}"#.to_vec();
+    assert_eq!(from_slice::<Enm>(&mut d).ok(), Some(Enm::Var(1, 2)));
+    let mut d = br#"{"Var":[1,2]}"#.to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    assert_eq!(from_refowned_value::<Enm>(&o).ok(), Some(Enm::Var(1, 2)));
+    assert_eq!(from_owned_value::<Enm>(o).ok(), Some(Enm::Var(1, 2)));
+}
+
+/// Deserializes the JSON object `json` as `T` through every path: `from_slice` and the four
+/// Value functions. Returns one result per path, labelled.
+fn map_key_results<T>(json: &str) -> Vec<(&'static str, Option<T>)>
+where
+    T: serde::de::DeserializeOwned,
+{
+    use crate::serde::{
+        from_borrowed_value, from_owned_value, from_refborrowed_value, from_refowned_value,
+    };
+    let mut d = json.as_bytes().to_vec();
+    let text = from_slice::<T>(&mut d).ok();
+    let mut d = json.as_bytes().to_vec();
+    let o = to_owned_value(&mut d).expect("valid");
+    let mut d2 = json.as_bytes().to_vec();
+    let b = to_borrowed_value(&mut d2).expect("valid");
+    vec![
+        ("from_slice", text),
+        ("from_refowned_value", from_refowned_value::<T>(&o).ok()),
+        ("from_owned_value", from_owned_value::<T>(o).ok()),
+        (
+            "from_refborrowed_value",
+            from_refborrowed_value::<T>(&b).ok(),
+        ),
+        ("from_borrowed_value", from_borrowed_value::<T>(b).ok()),
+    ]
+}
+
+#[test]
+fn integer_keys_follow_json_number_syntax() {
+    // Integer map keys used `str::parse`, which accepts `+1` and leading zeros. `-0` is
+    // rejected too: as a number it is the key `0`, as a string it isn't.
+    use std::collections::BTreeMap;
+    for key in [
+        "+1", "01", "-01", "00", "+0", "-0", " 1", "1 ", "", "1x", "-",
+    ] {
+        let json = format!(r#"{{"{key}":2}}"#);
+        for (path, r) in map_key_results::<BTreeMap<i64, u8>>(&json) {
+            assert_eq!(r, None, "i64 key {key:?} via {path}");
+        }
+        for (path, r) in map_key_results::<BTreeMap<u32, u8>>(&json) {
+            assert_eq!(r, None, "u32 key {key:?} via {path}");
+        }
+    }
+    let ok = BTreeMap::from([(0_i64, 1_u8), (-7, 2), (120, 3)]);
+    for (path, r) in map_key_results::<BTreeMap<i64, u8>>(r#"{"0":1,"-7":2,"120":3}"#) {
+        assert_eq!(r.as_ref(), Some(&ok), "via {path}");
+    }
+    // string keys are unchanged
+    let ok = BTreeMap::from([("01".to_string(), 2_u8), ("-0".to_string(), 3)]);
+    for (path, r) in map_key_results::<BTreeMap<String, u8>>(r#"{"01":2,"-0":3}"#) {
+        assert_eq!(r.as_ref(), Some(&ok), "via {path}");
+    }
+}
+
+#[test]
+fn i128_map_keys() {
+    // i128/u128 values deserialize without the `128bit` feature; keys used to fail with
+    // "i128 is not supported" unless it was enabled, from text and from every Value.
+    use std::collections::BTreeMap;
+    let ok = BTreeMap::from([(i128::MIN, 1_u8), (7, 2)]);
+    let json = r#"{"-170141183460469231731687303715884105728":1,"7":2}"#;
+    for (path, r) in map_key_results::<BTreeMap<i128, u8>>(json) {
+        assert_eq!(r.as_ref(), Some(&ok), "via {path}");
+    }
+    let ok = BTreeMap::from([(u128::MAX, 1_u8)]);
+    for (path, r) in
+        map_key_results::<BTreeMap<u128, u8>>(r#"{"340282366920938463463374607431768211455":1}"#)
+    {
+        assert_eq!(r.as_ref(), Some(&ok), "via {path}");
+    }
+    for (path, r) in
+        map_key_results::<BTreeMap<u128, u8>>(r#"{"340282366920938463463374607431768211456":1}"#)
+    {
+        assert_eq!(r, None, "u128 overflow via {path}");
+    }
+}
+
+#[test]
+fn value_map_integer_keys() {
+    // From an owned/borrowed Value (not a reference), map keys were deserialized as plain
+    // strings, so integer keys failed; all four Value functions must parse them.
+    use std::collections::BTreeMap;
+    let ok = BTreeMap::from([(1_i64, 2_u8), (-7, 3)]);
+    for (path, r) in map_key_results::<BTreeMap<i64, u8>>(r#"{"1":2,"-7":3}"#) {
+        assert_eq!(r.as_ref(), Some(&ok), "via {path}");
     }
 }

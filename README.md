@@ -1,3 +1,5 @@
+[![Compatibility with current nightly Rust](https://github.com/GWSysSec/rust-unsafe-benchmark/actions/workflows/main.yml/badge.svg)](https://github.com/GWSysSec/rust-unsafe-benchmark/actions/workflows/main.yml)
+
 # Unsafe Rust Benchmark
 
 Below is our 18 suite Rust unsafe execution performance benchmark.
@@ -40,6 +42,12 @@ generated.
 # version mismatch management
 cargo bench --locked # = Default
 ```
+
+## Current Rust Version Compatibility
+
+Our worker runs every month, on the first, on the latest version of rust
+available to check for compilation compatibility. If you encounter an error
+please open an issue.
 
 ## Dynamic Characteristics
 

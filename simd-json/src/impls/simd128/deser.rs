@@ -1,10 +1,11 @@
 use std::arch::wasm32::{u8x16_bitmask, u8x16_eq, u8x16_splat, v128, v128_load, v128_store};
+use std::mem::MaybeUninit;
 
 use crate::{
+    Deserializer, InputView, Result, SillyWrapper,
     error::ErrorType,
     safer_unchecked::GetSaferUnchecked,
-    stringparse::{handle_unicode_codepoint, ESCAPE_MAP},
-    Deserializer, Result, SillyWrapper,
+    stringparse::{ESCAPE_MAP, handle_unicode_codepoint},
 };
 
 #[target_feature(enable = "simd128")]
@@ -14,10 +15,10 @@ use crate::{
     clippy::too_many_lines
 )]
 #[cfg_attr(not(feature = "no-inline"), inline)]
-pub(crate) fn parse_str<'invoke, 'de>(
+pub(crate) fn parse_str<'de>(
     input: SillyWrapper<'de>,
-    data: &'invoke [u8],
-    buffer: &'invoke mut [u8],
+    data: InputView,
+    buffer: &mut [MaybeUninit<u8>],
     mut idx: usize,
 ) -> Result<&'de str> {
     use ErrorType::{InvalidEscape, InvalidUnicodeCodepoint};
@@ -29,7 +30,7 @@ pub(crate) fn parse_str<'invoke, 'de>(
     // This is safe since we check sub's length in the range access above and only
     // create sub sliced form sub to `sub.len()`.
 
-    let src = unsafe { data.get_kinda_unchecked(idx..) };
+    let src = unsafe { data.tail(idx) };
     let mut src_i = 0;
     let mut len = src_i;
     loop {
@@ -115,7 +116,7 @@ pub(crate) fn parse_str<'invoke, 'de>(
             unsafe {
                 input
                     .add(idx + len)
-                    .copy_from_nonoverlapping(buffer.as_ptr(), dst_i);
+                    .copy_from_nonoverlapping(buffer.as_ptr().cast::<u8>(), dst_i);
                 let v = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
                     input.add(idx),
                     len + dst_i,
@@ -136,15 +137,11 @@ pub(crate) fn parse_str<'invoke, 'de>(
                 // within the unicode codepoint handling code.
                 src_i += bs_dist as usize;
                 dst_i += bs_dist as usize;
-                let (o, s) = if let Ok(r) =
+                let Ok((o, s)) =
                     handle_unicode_codepoint(unsafe { src.get_kinda_unchecked(src_i..) }, unsafe {
                         buffer.get_kinda_unchecked_mut(dst_i..)
-                    }) {
-                    r
-                } else {
-                    return Err(Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint));
-                };
-                if o == 0 {
+                    })
+                else {
                     return Err(Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint));
                 };
                 // We moved o steps forward at the destination and 6 on the source
@@ -165,7 +162,9 @@ pub(crate) fn parse_str<'invoke, 'de>(
                     ));
                 }
                 unsafe {
-                    *buffer.get_kinda_unchecked_mut(dst_i + bs_dist as usize) = escape_result;
+                    buffer
+                        .get_kinda_unchecked_mut(dst_i + bs_dist as usize)
+                        .write(escape_result);
                 }
                 src_i += bs_dist as usize + 2;
                 dst_i += bs_dist as usize + 1;

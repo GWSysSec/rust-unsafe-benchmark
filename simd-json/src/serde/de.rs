@@ -1,5 +1,5 @@
 use crate::serde_ext::de::IntoDeserializer;
-use crate::{stry, Deserializer, Error, ErrorType, Node, Result, StaticNode};
+use crate::{Deserializer, Error, ErrorType, Node, Result, StaticNode, macros::stry};
 use serde_ext::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_ext::forward_to_deserialize_any;
 use std::str;
@@ -30,8 +30,8 @@ where
             Node::Static(StaticNode::U64(n)) => visitor.visit_u64(n),
             #[cfg(feature = "128bit")]
             Node::Static(StaticNode::U128(n)) => visitor.visit_u128(n),
-            Node::Array { len, count: _ } => visitor.visit_seq(CommaSeparated::new(self, len)),
-            Node::Object { len, count: _ } => visitor.visit_map(CommaSeparated::new(self, len)),
+            Node::Array { len, count: _ } => visit_array(self, len, visitor),
+            Node::Object { len, count: _ } => visit_object(self, len, visitor),
         }
     }
 
@@ -237,7 +237,7 @@ where
         // Parse the opening bracket of the sequence.
         if let Ok(Node::Array { len, count: _ }) = self.next() {
             // Give the visitor access to each element of the sequence.
-            visitor.visit_seq(CommaSeparated::new(self, len))
+            visit_array(self, len, visitor)
         } else {
             Err(Deserializer::error(ErrorType::ExpectedArray))
         }
@@ -300,7 +300,7 @@ where
         // Parse the opening bracket of the sequence.
         if let Ok(Node::Object { len, count: _ }) = self.next() {
             // Give the visitor access to each element of the sequence.
-            visitor.visit_map(CommaSeparated::new(self, len))
+            visit_object(self, len, visitor)
         } else {
             Err(Deserializer::error(ErrorType::ExpectedMap))
         }
@@ -318,8 +318,8 @@ where
     {
         match self.next() {
             // Give the visitor access to each element of the sequence.
-            Ok(Node::Object { len, count: _ }) => visitor.visit_map(CommaSeparated::new(self, len)),
-            Ok(Node::Array { len, count: _ }) => visitor.visit_seq(CommaSeparated::new(self, len)),
+            Ok(Node::Object { len, count: _ }) => visit_object(self, len, visitor),
+            Ok(Node::Array { len, count: _ }) => visit_array(self, len, visitor),
             _ => Err(Deserializer::error(ErrorType::ExpectedMap)),
         }
     }
@@ -364,7 +364,7 @@ impl<'a, 'de> VariantAccess<'a, 'de> {
     }
 }
 
-impl<'de, 'a> de::EnumAccess<'de> for VariantAccess<'a, 'de> {
+impl<'de> de::EnumAccess<'de> for VariantAccess<'_, 'de> {
     type Error = Error;
     type Variant = Self;
 
@@ -377,7 +377,7 @@ impl<'de, 'a> de::EnumAccess<'de> for VariantAccess<'a, 'de> {
     }
 }
 
-impl<'de, 'a> de::VariantAccess<'de> for VariantAccess<'a, 'de> {
+impl<'de> de::VariantAccess<'de> for VariantAccess<'_, 'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
@@ -406,6 +406,37 @@ impl<'de, 'a> de::VariantAccess<'de> for VariantAccess<'a, 'de> {
     }
 }
 
+/// Hands the `len` elements of an array to `visitor`. A visitor of fixed length (tuple, array,
+/// tuple struct, struct from an array) stops asking for elements once it has enough; the elements
+/// it left unread would stay on the tape and be read as the values that follow, so they are an
+/// error, as in `serde_json` ("trailing characters") and `serde::de::value::SeqDeserializer`.
+fn visit_array<'de, V>(de: &mut Deserializer<'de>, len: usize, visitor: V) -> Result<V::Value>
+where
+    V: Visitor<'de>,
+{
+    let mut seq = CommaSeparated::new(de, len);
+    let value = stry!(visitor.visit_seq(&mut seq));
+    if seq.len == 0 {
+        Ok(value)
+    } else {
+        Err(de::Error::invalid_length(len, &"fewer elements in array"))
+    }
+}
+
+/// Like [`visit_array`], for the `len` members of an object.
+fn visit_object<'de, V>(de: &mut Deserializer<'de>, len: usize, visitor: V) -> Result<V::Value>
+where
+    V: Visitor<'de>,
+{
+    let mut map = CommaSeparated::new(de, len);
+    let value = stry!(visitor.visit_map(&mut map));
+    if map.len == 0 {
+        Ok(value)
+    } else {
+        Err(de::Error::invalid_length(len, &"fewer elements in map"))
+    }
+}
+
 // In order to handle commas correctly when deserializing a JSON array or map,
 // we need to track whether we are on the first element or past the first
 // element.
@@ -422,7 +453,7 @@ impl<'a, 'de> CommaSeparated<'a, 'de> {
 
 // `SeqAccess` is provided to the `Visitor` to give it the ability to iterate
 // through elements of the sequence.
-impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
+impl<'de> SeqAccess<'de> for CommaSeparated<'_, 'de> {
     type Error = Error;
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
@@ -445,7 +476,7 @@ impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
 
 // `MapAccess` is provided to the `Visitor` to give it the ability to iterate
 // through entries of the map.
-impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
+impl<'de> MapAccess<'de> for CommaSeparated<'_, 'de> {
     type Error = Error;
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
@@ -466,6 +497,9 @@ impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
     where
         V: DeserializeSeed<'de>,
     {
+        if self.de.idx >= self.de.tape.len() {
+            return Err(Deserializer::error(ErrorType::Eof));
+        }
         // read the value
         seed.deserialize(&mut *self.de)
     }
@@ -488,17 +522,16 @@ macro_rules! deserialize_integer_key {
         where
             V: de::Visitor<'de>,
         {
-            visitor.$visit(stry!(match unsafe { self.de.next_() } {
-                Node::String(s) => s
-                    .parse::<$type>()
-                    .map_err(|_| Deserializer::error(ErrorType::InvalidNumber)),
+            visitor.$visit(stry!(match stry!(self.de.next()) {
+                Node::String(s) => crate::serde::parse_integer_key::<$type>(s)
+                    .ok_or_else(|| Deserializer::error(ErrorType::InvalidNumber)),
                 _ => Err(Deserializer::error(ErrorType::ExpectedString)),
             }))
         }
     };
 }
 
-impl<'de, 'a> de::Deserializer<'de> for MapKey<'de, 'a> {
+impl<'de> de::Deserializer<'de> for MapKey<'de, '_> {
     type Error = Error;
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
@@ -521,9 +554,8 @@ impl<'de, 'a> de::Deserializer<'de> for MapKey<'de, 'a> {
     deserialize_integer_key!(deserialize_u32 => visit_u32; u32);
     deserialize_integer_key!(deserialize_u64 => visit_u64; u64);
 
-    #[cfg(feature = "128bit")]
+    // Like i128/u128 values, keys don't need the `128bit` feature: the key text is parsed directly.
     deserialize_integer_key!(deserialize_i128 => visit_i128; i128);
-    #[cfg(feature = "128bit")]
     deserialize_integer_key!(deserialize_u128 => visit_u128; u128);
 
     #[cfg_attr(not(feature = "no-inline"), inline)]

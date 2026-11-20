@@ -223,57 +223,57 @@ macro_rules! json_internal_owned {
     //////////////////////////////////////////////////////////////////////////
 
     // Done with trailing comma.
-    (@array [$($elems:expr,)*]) => {
+    (@array [$($elems:expr_2021,)*]) => {
         json_internal_vec![$($elems,)*]
     };
 
     // Done without trailing comma.
-    (@array [$($elems:expr),*]) => {
+    (@array [$($elems:expr_2021),*]) => {
         json_internal_vec![$($elems),*]
     };
 
     // Next element is `null`.
-    (@array [$($elems:expr,)*] null $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] null $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!(null)] $($rest)*)
     };
 
     // Next element is `true`.
-    (@array [$($elems:expr,)*] true $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] true $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!(true)] $($rest)*)
     };
 
     // Next element is `false`.
-    (@array [$($elems:expr,)*] false $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] false $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!(false)] $($rest)*)
     };
 
     // Next element is an array.
-    (@array [$($elems:expr,)*] [$($array:tt)*] $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] [$($array:tt)*] $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!([$($array)*])] $($rest)*)
     };
 
     // Next element is a map.
-    (@array [$($elems:expr,)*] {$($map:tt)*} $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] {$($map:tt)*} $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!({$($map)*})] $($rest)*)
     };
 
     // Next element is an expression followed by comma.
-    (@array [$($elems:expr,)*] $next:expr, $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] $next:expr_2021, $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!($next),] $($rest)*)
     };
 
     // Last element is an expression with no trailing comma.
-    (@array [$($elems:expr,)*] $last:expr) => {
+    (@array [$($elems:expr_2021,)*] $last:expr_2021) => {
         json_internal_owned!(@array [$($elems,)* json_internal_owned!($last)])
     };
 
     // Comma after the most recent element.
-    (@array [$($elems:expr),*] , $($rest:tt)*) => {
+    (@array [$($elems:expr_2021),*] , $($rest:tt)*) => {
         json_internal_owned!(@array [$($elems,)*] $($rest)*)
     };
 
     // Unexpected token after most recent element.
-    (@array [$($elems:expr),*] $unexpected:tt $($rest:tt)*) => {
+    (@array [$($elems:expr_2021),*] $unexpected:tt $($rest:tt)*) => {
         json_unexpected!($unexpected)
     };
 
@@ -294,17 +294,17 @@ macro_rules! json_internal_owned {
 
     // Count the number of entries to insert.
     // Modified version of https://docs.rs/halfbrown/0.1.11/src/halfbrown/macros.rs.html#46-62
-    (@object @count [@entries $(($value:expr => $($key:tt)+))*]) => {
+    (@object @count [@entries $(($value:expr_2021 => $($key:tt)+))*]) => {
         <[()]>::len(&[$(json_internal_owned!(@object @count @single ($($key)+))),*])
     };
     (@object @count @single ($($key:tt)+)) => {()};
 
     // Done. Insert all entries from the stack
-    (@object $object:ident [@entries $(($value:expr => $($key:tt)+))*] () () ()) => {
+    (@object $object:ident [@entries $(($value:expr_2021 => $($key:tt)+))*] () () ()) => {
         let len = json_internal_owned!(@object @count [@entries $(($value => $($key)+))*]);
         $object = $crate::value::owned::Object::with_capacity_and_hasher(len, $crate::value::ObjectHasher::default());
         $(
-            #[allow(clippy::let_underscore_drop)]
+            #[allow(let_underscore_drop)]
             let _: Option<_> = $object.insert(($($key)+).into(), $value);
         )*
     };
@@ -314,18 +314,18 @@ macro_rules! json_internal_owned {
     // keeping inserts in the same order that they're defined in the macro.
     //
     // We expand the $key _after_ the $value since $key => $value leads to a parsing ambiguity.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr) , $($rest:tt)*) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021) , $($rest:tt)*) => {
         json_internal_owned!(@object $object [@entries $($entries)* ($value => $($key)+) ] () ($($rest)*) ($($rest)*));
     };
 
     // Insert the last entry (without trailing comma) into the stack.
     // At this point the recursion is complete and the entries can now be inserted.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr)) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021)) => {
         json_internal_owned!(@object $object [@entries $($entries)* ($value => $($key)+) ] () () ());
     };
 
     // Current entry followed by unexpected token.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr) $unexpected:tt $($rest:tt)*) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021) $unexpected:tt $($rest:tt)*) => {
         json_unexpected!($unexpected);
     };
 
@@ -356,12 +356,12 @@ macro_rules! json_internal_owned {
     };
 
     // Next value is an expression followed by comma.
-    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr , $($rest:tt)*) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr_2021 , $($rest:tt)*) $copy:tt) => {
         json_internal_owned!(@object $object [@entries $($entries)*] [$($key)+] (json_internal_owned!($value)) , $($rest)*);
     };
 
     // Last value is an expression with no trailing comma.
-    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr_2021) $copy:tt) => {
         json_internal_owned!(@object $object [@entries $($entries)*] [$($key)+] (json_internal_owned!($value)));
     };
 
@@ -392,7 +392,7 @@ macro_rules! json_internal_owned {
 
     // Key is fully parenthesized. This avoids clippy double_parens false
     // positives because the parenthesization may be necessary here.
-    (@object $object:ident [@entries $($entries:tt)*] () (($key:expr) : $($rest:tt)*) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] () (($key:expr_2021) : $($rest:tt)*) $copy:tt) => {
         json_internal_owned!(@object $object [@entries $($entries)*] ($key) (: $($rest)*) (: $($rest)*));
     };
 
@@ -444,7 +444,7 @@ macro_rules! json_internal_owned {
 
     // Any Serialize type: numbers, strings, struct literals, variables etc.
     // Must be below every other rule.
-    ($other:expr) => {
+    ($other:expr_2021) => {
         $crate::serde::to_owned_value(&$other).expect("serde::to_owned_value")
     };
 }
@@ -706,57 +706,57 @@ macro_rules! json_internal_borrowed {
     //////////////////////////////////////////////////////////////////////////
 
     // Done with trailing comma.
-    (@array [$($elems:expr,)*]) => {
+    (@array [$($elems:expr_2021,)*]) => {
         json_internal_vec![$($elems,)*]
     };
 
     // Done without trailing comma.
-    (@array [$($elems:expr),*]) => {
+    (@array [$($elems:expr_2021),*]) => {
         json_internal_vec![$($elems),*]
     };
 
     // Next element is `null`.
-    (@array [$($elems:expr,)*] null $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] null $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!(null)] $($rest)*)
     };
 
     // Next element is `true`.
-    (@array [$($elems:expr,)*] true $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] true $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!(true)] $($rest)*)
     };
 
     // Next element is `false`.
-    (@array [$($elems:expr,)*] false $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] false $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!(false)] $($rest)*)
     };
 
     // Next element is an array.
-    (@array [$($elems:expr,)*] [$($array:tt)*] $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] [$($array:tt)*] $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!([$($array)*])] $($rest)*)
     };
 
     // Next element is a map.
-    (@array [$($elems:expr,)*] {$($map:tt)*} $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] {$($map:tt)*} $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!({$($map)*})] $($rest)*)
     };
 
     // Next element is an expression followed by comma.
-    (@array [$($elems:expr,)*] $next:expr, $($rest:tt)*) => {
+    (@array [$($elems:expr_2021,)*] $next:expr_2021, $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!($next),] $($rest)*)
     };
 
     // Last element is an expression with no trailing comma.
-    (@array [$($elems:expr,)*] $last:expr) => {
+    (@array [$($elems:expr_2021,)*] $last:expr_2021) => {
         json_internal_borrowed!(@array [$($elems,)* json_internal_borrowed!($last)])
     };
 
     // Comma after the most recent element.
-    (@array [$($elems:expr),*] , $($rest:tt)*) => {
+    (@array [$($elems:expr_2021),*] , $($rest:tt)*) => {
         json_internal_borrowed!(@array [$($elems,)*] $($rest)*)
     };
 
     // Unexpected token after most recent element.
-    (@array [$($elems:expr),*] $unexpected:tt $($rest:tt)*) => {
+    (@array [$($elems:expr_2021),*] $unexpected:tt $($rest:tt)*) => {
         json_unexpected!($unexpected)
     };
 
@@ -777,18 +777,18 @@ macro_rules! json_internal_borrowed {
 
     // Count the number of entries to insert.
     // Modified version of https://docs.rs/halfbrown/0.1.11/src/halfbrown/macros.rs.html#46-62
-    (@object @count [@entries $(($value:expr => $($key:tt)+))*]) => {
+    (@object @count [@entries $(($value:expr_2021 => $($key:tt)+))*]) => {
         <[()]>::len(&[$(json_internal_borrowed!(@object @count @single ($($key)+))),*])
     };
     (@object @count @single ($($key:tt)+)) => {()};
 
     // Done. Insert all entries from the stack
-    (@object $object:ident [@entries $(($value:expr => $($key:tt)+))*] () () ()) => {
+    (@object $object:ident [@entries $(($value:expr_2021 => $($key:tt)+))*] () () ()) => {
         let len = json_internal_borrowed!(@object @count [@entries $(($value => $($key)+))*]);
 
         $object = $crate::value::borrowed::Object::with_capacity_and_hasher(len, $crate::value::ObjectHasher::default());
         $(
-            #[allow(clippy::let_underscore_drop)]
+            #[allow(let_underscore_drop)]
             let _:Option<_> = $object.insert(($($key)+).into(), $value);
         )*
 
@@ -799,18 +799,18 @@ macro_rules! json_internal_borrowed {
     // keeping inserts in the same order that they're defined in the macro.
     //
     // We expand the $key _after_ the $value since $key => $value leads to a parsing ambiguity.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr) , $($rest:tt)*) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021) , $($rest:tt)*) => {
         json_internal_borrowed!(@object $object [@entries $($entries)* ($value => $($key)+) ] () ($($rest)*) ($($rest)*));
     };
 
     // Insert the last entry (without trailing comma) into the stack.
     // At this point the recursion is complete and the entries can now be inserted.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr)) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021)) => {
         json_internal_borrowed!(@object $object [@entries $($entries)* ($value => $($key)+) ] () () ());
     };
 
     // Current entry followed by unexpected token.
-    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr) $unexpected:tt $($rest:tt)*) => {
+    (@object $object:ident [@entries $($entries:tt)*] [$($key:tt)+] ($value:expr_2021) $unexpected:tt $($rest:tt)*) => {
         json_unexpected!($unexpected);
     };
 
@@ -841,12 +841,12 @@ macro_rules! json_internal_borrowed {
     };
 
     // Next value is an expression followed by comma.
-    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr , $($rest:tt)*) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr_2021 , $($rest:tt)*) $copy:tt) => {
         json_internal_borrowed!(@object $object [@entries $($entries)*] [$($key)+] (json_internal_borrowed!($value)) , $($rest)*);
     };
 
     // Last value is an expression with no trailing comma.
-    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] ($($key:tt)+) (: $value:expr_2021) $copy:tt) => {
         json_internal_borrowed!(@object $object [@entries $($entries)*] [$($key)+] (json_internal_borrowed!($value)));
     };
 
@@ -877,7 +877,7 @@ macro_rules! json_internal_borrowed {
 
     // Key is fully parenthesized. This avoids clippy double_parens false
     // positives because the parenthesization may be necessary here.
-    (@object $object:ident [@entries $($entries:tt)*] () (($key:expr) : $($rest:tt)*) $copy:tt) => {
+    (@object $object:ident [@entries $($entries:tt)*] () (($key:expr_2021) : $($rest:tt)*) $copy:tt) => {
         json_internal_borrowed!(@object $object [@entries $($entries)*] ($key) (: $($rest)*) (: $($rest)*));
     };
 
@@ -929,7 +929,7 @@ macro_rules! json_internal_borrowed {
 
     // Any Serialize type: numbers, strings, struct literals, variables etc.
     // Must be below every other rule.
-    ($other:expr) => {
+    ($other:expr_2021) => {
         $crate::serde::to_borrowed_value(&$other).expect("serde::to_borrowed_value")
     };
 }
@@ -1191,52 +1191,18 @@ macro_rules! json_unexpected {
     () => {};
 }
 
-/// possible compiler hint that a branch is likely
-#[cfg(feature = "hints")]
-#[macro_export]
-macro_rules! likely {
-    ($e:expr) => {
-        ::std::intrinsics::likely($e)
-    };
-}
-
 /// possible compiler hint that a branch is unlikely
 #[cfg(feature = "hints")]
-#[macro_export]
 macro_rules! unlikely {
-    ($e:expr) => {{
-        ::std::intrinsics::unlikely($e)
-    }};
-}
-
-/// possible compiler hint that a branch is likely
-///
-/// Technique borrowed from here: <https://github.com/rust-lang/hashbrown/pull/209>
-#[cfg(not(feature = "hints"))]
-#[macro_export]
-macro_rules! likely {
-    ($e:expr) => {{
-        #[inline]
-        #[cold]
-        fn cold() {}
-
-        let cond = $e;
-
-        if !cond {
-            cold();
-        }
-
-        cond
-    }};
+    ($e:expr) => {{ ::std::intrinsics::unlikely($e) }};
 }
 
 /// possible compiler hint that a branch is unlikely
 ///
 /// Technique borrowed from here: <https://github.com/rust-lang/hashbrown/pull/209>
 #[cfg(not(feature = "hints"))]
-#[macro_export]
 macro_rules! unlikely {
-    ($e:expr) => {{
+    ($e:expr_2021) => {{
         #[inline]
         #[cold]
         fn cold() {}
@@ -1251,68 +1217,63 @@ macro_rules! unlikely {
     }};
 }
 
-/// static cast to an i8
-#[macro_export]
-macro_rules! static_cast_i8 {
-    ($v:expr) => {
-        ::std::transmute::<_, i8>($v)
-    };
-}
+#[allow(unused_imports)]
+pub(crate) use unlikely;
 
 /// static cast to an i32
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! static_cast_i32 {
-    ($v:expr) => {
-        ::std::mem::transmute::<u32, i32>($v)
+    ($v:expr_2021) => {
+        u32::cast_signed($v)
     };
 }
+#[allow(unused_imports)]
+pub(crate) use static_cast_i32;
 
 /// static cast to an u32
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! static_cast_u32 {
-    ($v:expr) => {
-        ::std::mem::transmute::<_, u32>($v)
+    ($v:expr_2021) => {
+        // #[allow(clippy::missing_transmute_annotations)]
+        i32::cast_unsigned($v)
     };
 }
+#[allow(unused_imports)]
+pub(crate) use static_cast_u32;
 
 /// static cast to an i64
-#[macro_export]
 macro_rules! static_cast_i64 {
-    ($v:expr) => {
-        ::std::mem::transmute::<u64, i64>($v)
+    ($v:expr_2021) => {
+        u64::cast_signed($v)
     };
 }
-
-/// static cast to an i64
-#[macro_export]
-macro_rules! static_cast_i128 {
-    ($v:expr) => {
-        ::std::mem::transmute::<_, i128>($v)
-    };
-}
+#[allow(unused_imports)]
+pub(crate) use static_cast_i64;
 
 /// static cast to an u64
-#[macro_export]
 macro_rules! static_cast_u64 {
-    ($v:expr) => {
-        ::std::mem::transmute::<i64, u64>($v)
+    ($v:expr_2021) => {
+        i64::cast_unsigned($v)
     };
 }
+#[allow(unused_imports)]
+pub(crate) use static_cast_u64;
 
 /// Custom `try!` macro that does no `From` conversions
 ///
 /// FROM serde-json
 /// We only use our own error type; no need for From conversions provided by the
 /// standard library's try! macro. This reduces lines of LLVM IR by 4%.
-#[macro_export]
 macro_rules! stry {
-    ($e:expr) => {
+    ($e:expr_2021) => {
         match $e {
             ::std::result::Result::Ok(val) => val,
             ::std::result::Result::Err(err) => return ::std::result::Result::Err(err),
         }
     };
 }
+#[allow(unused_imports)]
+pub(crate) use stry;
 
 #[cfg(test)]
 mod test {

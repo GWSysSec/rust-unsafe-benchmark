@@ -10,6 +10,9 @@ pub enum ErrorType {
     /// Simd-json only supports inputs of up to
     /// 4GB in size.
     InputTooLarge,
+    /// The input to [`fill_tape_padded`](crate::fill_tape_padded) has fewer than
+    /// [`INPUT_PADDING`](crate::INPUT_PADDING) bytes past the document.
+    InsufficientPadding,
     /// The key of a map isn't a string
     BadKeyType,
     /// Expected an array
@@ -47,7 +50,7 @@ pub enum ErrorType {
     /// Expected an unsigned number
     ExpectedUnsigned,
     /// Internal error
-    InternalError(InternalError),
+    InternalError,
     /// Invalid escape sequence
     InvalidEscape,
     /// Invalid exponent in a floating point number
@@ -86,15 +89,12 @@ pub enum ErrorType {
     ExpectedObjectKey,
     /// Overflow of a limited buffer
     Overflow,
+    /// The structure depth exceeds the limit (`1024` by default).
+    DepthLimitExceeded,
     /// No SIMD support detected during runtime
     SimdUnsupported,
     /// IO error
     Io(std::io::Error),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum InternalError {
-    TapeError,
 }
 
 impl From<std::io::Error> for Error {
@@ -105,7 +105,6 @@ impl From<std::io::Error> for Error {
 
 #[cfg(not(tarpaulin_include))]
 impl PartialEq for ErrorType {
-    #[must_use]
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Io(_), Self::Io(_))
@@ -144,9 +143,13 @@ impl PartialEq for ErrorType {
             | (Self::ExpectedArrayContent, Self::ExpectedArrayContent)
             | (Self::ExpectedObjectContent, Self::ExpectedObjectContent)
             | (Self::ExpectedObjectKey, Self::ExpectedObjectKey)
-            | (Self::Overflow, Self::Overflow) => true,
+            | (Self::Overflow, Self::Overflow)
+            | (Self::DepthLimitExceeded, Self::DepthLimitExceeded)
+            | (Self::InputTooLarge, Self::InputTooLarge)
+            | (Self::InsufficientPadding, Self::InsufficientPadding)
+            | (Self::SimdUnsupported, Self::SimdUnsupported)
+            | (Self::InternalError, Self::InternalError) => true,
             (Self::Serde(s1), Self::Serde(s2)) => s1 == s2,
-            (Self::InternalError(e1), Self::InternalError(e2)) => e1 == e2,
             _ => false,
         }
     }
@@ -159,28 +162,34 @@ pub struct Error {
     /// Current character
     character: Option<char>,
     /// Type of error
-    error: ErrorType,
+    err_type: ErrorType,
 }
 
 impl Error {
-    pub(crate) fn new(index: usize, character: Option<char>, error: ErrorType) -> Self {
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn new(index: usize, character: Option<char>, err_type: ErrorType) -> Self {
         Self {
             index,
             character,
-            error,
+            err_type,
         }
     }
+    #[cold]
+    #[inline(never)]
     pub(crate) fn new_c(index: usize, character: char, error: ErrorType) -> Self {
         Self::new(index, Some(character), error)
     }
 
     /// Create a generic error
     #[must_use = "Error creation"]
+    #[cold]
+    #[inline(never)]
     pub fn generic(t: ErrorType) -> Self {
         Self {
             index: 0,
             character: None,
-            error: t,
+            err_type: t,
         }
     }
 
@@ -199,7 +208,7 @@ impl Error {
     /// Returns the type of error that occurred.
     #[must_use]
     pub fn error(&self) -> &ErrorType {
-        &self.error
+        &self.err_type
     }
 
     // These make it a bit easier to fit into a serde_json context
@@ -209,18 +218,16 @@ impl Error {
     /// Indicates if the error that occurred was an IO error
     #[must_use]
     pub fn is_io(&self) -> bool {
-        // We have to include InternalError _somewhere_
-        match &self.error {
-            ErrorType::Io(_) | ErrorType::InputTooLarge => true,
-            ErrorType::InternalError(e) if !matches!(e, crate::InternalError::TapeError) => true,
-            _ => false,
-        }
+        matches!(
+            self.err_type,
+            ErrorType::Io(_) | ErrorType::InputTooLarge | ErrorType::InsufficientPadding
+        )
     }
 
     /// Indicates if the error that occurred was an early EOF
     #[must_use]
     pub fn is_eof(&self) -> bool {
-        matches!(self.error, ErrorType::Eof)
+        matches!(self.err_type, ErrorType::Eof)
     }
 
     /// Indicates if the error that occurred was due to a data shape error
@@ -235,8 +242,8 @@ impl Error {
     pub fn is_syntax(&self) -> bool {
         // Lazy? maybe but if it aint something else...
         matches!(
-            self.error,
-            ErrorType::InternalError(crate::InternalError::TapeError) | //This seems to get thrown on some syntax errors
+            self.err_type,
+            ErrorType::InternalError | //This seems to get thrown on some syntax errors
             ErrorType::BadKeyType |
             ErrorType::ExpectedArrayComma |
             ErrorType::ExpectedObjectColon |
@@ -269,9 +276,9 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(c) = self.character {
-            write!(f, "{:?} at character {} ('{c}')", self.error, self.index)
+            write!(f, "{:?} at character {} ('{c}')", self.err_type, self.index)
         } else {
-            write!(f, "{:?} at character {}", self.error, self.index)
+            write!(f, "{:?} at character {}", self.err_type, self.index)
         }
     }
 }

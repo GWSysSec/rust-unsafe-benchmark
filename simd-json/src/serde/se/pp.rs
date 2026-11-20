@@ -1,4 +1,4 @@
-use crate::{stry, Error, ErrorType};
+use crate::{Error, ErrorType, macros::stry};
 use serde_ext::ser;
 use std::io::Write;
 use std::str;
@@ -7,7 +7,7 @@ use value_trait::generator::BaseGenerator;
 use super::key_must_be_a_string;
 
 macro_rules! iomap {
-    ($e:expr) => {
+    ($e:expr_2021) => {
         ($e).map_err(|err| Error::generic(ErrorType::Io(err)))
     };
 }
@@ -106,7 +106,7 @@ struct SerializeSeq<'serializer, W: Write + 'serializer> {
     s: &'serializer mut PrettySerializer<W>,
     first: bool,
 }
-impl<'serializer, W> ser::SerializeSeq for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeSeq for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -132,16 +132,16 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"]"))
         } else {
-            self.s.dedent();
             iomap!(self.s.new_line().and_then(|()| self.s.write(b"]")))
         }
     }
 }
 
-impl<'serializer, W> ser::SerializeTuple for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTuple for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -166,16 +166,16 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"]"))
         } else {
-            self.s.dedent();
             iomap!(self.s.new_line().and_then(|()| self.s.write(b"]")))
         }
     }
 }
 
-impl<'serializer, W> ser::SerializeTupleStruct for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTupleStruct for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -200,16 +200,16 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"]"))
         } else {
-            self.s.dedent();
             iomap!(self.s.new_line().and_then(|()| self.s.write(b"]")))
         }
     }
 }
 
-impl<'serializer, W> ser::SerializeTupleVariant for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTupleVariant for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -234,12 +234,15 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        // close the array of fields, then the `{"Variant": ...}` object around it
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"]"))?;
         } else {
-            self.s.dedent();
-            iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
+            iomap!(self.s.new_line().and_then(|()| self.s.write(b"]")))?;
         }
+        self.s.dedent();
+        iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
     }
 }
 
@@ -247,7 +250,7 @@ struct MapKeySerializer<'serializer, W: Write + 'serializer> {
     s: &'serializer mut PrettySerializer<W>,
 }
 
-impl<'serializer, W> ser::Serializer for MapKeySerializer<'serializer, W>
+impl<W> ser::Serializer for MapKeySerializer<'_, W>
 where
     W: Write,
 {
@@ -290,83 +293,93 @@ where
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_f32(self, _v: f32) -> Result<Self::Ok, Self::Error> {
@@ -471,7 +484,7 @@ struct SerializeMap<'serializer, W: Write + 'serializer> {
     first: bool,
 }
 
-impl<'serializer, W> ser::SerializeMap for SerializeMap<'serializer, W>
+impl<W> ser::SerializeMap for SerializeMap<'_, W>
 where
     W: Write,
 {
@@ -509,16 +522,16 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"}"))
         } else {
-            self.s.dedent();
             iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
         }
     }
 }
 
-impl<'serializer, W> ser::SerializeStruct for SerializeMap<'serializer, W>
+impl<W> ser::SerializeStruct for SerializeMap<'_, W>
 where
     W: Write,
 {
@@ -536,25 +549,27 @@ where
         } = *self;
         if *first {
             *first = false;
-            iomap!(s
-                .new_line()
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b": ")))
+            iomap!(
+                s.new_line()
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b": "))
+            )
             .and_then(|()| value.serialize(&mut **s))
         } else {
-            iomap!(s
-                .write(b",")
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b": ")))
+            iomap!(
+                s.write(b",")
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b": "))
+            )
             .and_then(|()| value.serialize(&mut **s))
         }
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.s.dedent();
         if self.first {
-            Ok(())
+            iomap!(self.s.write(b"}"))
         } else {
-            self.s.dedent();
             iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
         }
     }
@@ -565,7 +580,7 @@ struct SerializeStructVariant<'serializer, W: Write + 'serializer> {
     first: bool,
 }
 
-impl<'serializer, W> ser::SerializeStructVariant for SerializeStructVariant<'serializer, W>
+impl<W> ser::SerializeStructVariant for SerializeStructVariant<'_, W>
 where
     W: Write,
 {
@@ -584,31 +599,31 @@ where
         if *first {
             *first = false;
             s.indent();
-            iomap!(s
-                .new_line()
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b": ")))
+            iomap!(
+                s.new_line()
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b": "))
+            )
             .and_then(|()| value.serialize(&mut **s))
         } else {
-            iomap!(s
-                .write(b",")
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b": ")))
+            iomap!(
+                s.write(b",")
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b": "))
+            )
             .and_then(|()| value.serialize(&mut **s))
         }
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        if self.first {
+            iomap!(self.s.write(b"}"))?;
+        } else {
+            self.s.dedent();
+            iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))?;
+        }
         self.s.dedent();
-        iomap!(self.s.new_line().and_then(|()| self.s.write(b"}"))).and_then(move |()| {
-            if self.first {
-                Ok(())
-            } else {
-                self.s.dedent();
-
-                iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
-            }
-        })
+        iomap!(self.s.new_line().and_then(|()| self.s.write(b"}")))
     }
 }
 
@@ -764,22 +779,18 @@ where
     where
         T: ?Sized + serde_ext::Serialize,
     {
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b": ")))
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b": "))
+        )
         .and_then(|()| value.serialize(&mut *self))
         .and_then(|()| iomap!(self.write(b"}")))
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        if len == Some(0) {
-            iomap!(self.write(b"[]"))
-        } else {
-            self.indent();
-            iomap!(self.write(b"["))
-        }
-        .map(move |()| SerializeSeq {
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        self.indent();
+        iomap!(self.write(b"[")).map(move |()| SerializeSeq {
             s: self,
             first: true,
         })
@@ -808,23 +819,19 @@ where
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         self.indent();
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.new_line())
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b": ")))
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.new_line())
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b": "))
+        )
         .and_then(move |()| self.serialize_seq(Some(len)))
     }
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        if len == Some(0) {
-            iomap!(self.write(b"{}"))
-        } else {
-            self.indent();
-            iomap!(self.write(b"{"))
-        }
-        .map(move |()| SerializeMap {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        self.indent();
+        iomap!(self.write(b"{")).map(move |()| SerializeMap {
             s: self,
             first: true,
         })
@@ -845,35 +852,29 @@ where
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        len: usize,
+        _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         self.indent();
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.new_line())
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b": ")))
-        .and_then(move |()| {
-            if len == 0 {
-                iomap!(self.write(b"{}"))
-            } else {
-                iomap!(self.write(b"{"))
-            }
-            .map(move |()| SerializeStructVariant {
-                s: self,
-                first: true,
-            })
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.new_line())
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b": {"))
+        )
+        .map(move |()| SerializeStructVariant {
+            s: self,
+            first: true,
         })
     }
 }
 
 #[cfg(test)]
 mod test {
-    #![allow(clippy::ignored_unit_patterns)]
-    use crate::from_slice;
+    #![allow(clippy::ignored_unit_patterns, unused_imports)]
     use crate::OwnedValue as Value;
     #[cfg(not(target_arch = "wasm32"))]
     use crate::StaticNode;
+    use crate::from_slice;
     #[cfg(not(target_arch = "wasm32"))]
     use proptest::prelude::*;
     #[test]
@@ -886,6 +887,102 @@ mod test {
         assert_eq!(
             "{\n  \"Id\": {\n    \"mid\": 0\n  }\n}",
             crate::to_string_pretty(&Segment::Id { mid: 0 }).expect("to_string_pretty")
+        );
+    }
+
+    #[test]
+    fn pretty_print_empty_containers_of_unknown_length() {
+        use std::collections::BTreeMap;
+
+        // `collect_seq` over a filter passes `len: None`
+        struct Filtered(Vec<u8>);
+        impl serde::Serialize for Filtered {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.collect_seq(self.0.iter().filter(|x| **x > 10))
+            }
+        }
+        #[derive(serde::Serialize)]
+        struct Flat {
+            #[serde(flatten)]
+            rest: BTreeMap<String, u8>,
+        }
+
+        assert_eq!(
+            crate::to_string_pretty(&Filtered(vec![1, 2])).expect("to_string_pretty"),
+            "[]"
+        );
+        assert_eq!(
+            crate::to_string_pretty(&vec![Filtered(vec![1]), Filtered(vec![2])])
+                .expect("to_string_pretty"),
+            "[\n  [],\n  []\n]"
+        );
+        assert_eq!(
+            crate::to_string_pretty(&Flat {
+                rest: BTreeMap::new()
+            })
+            .expect("to_string_pretty"),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn pretty_print_empty_and_nonempty_containers() {
+        #[derive(serde::Serialize)]
+        struct Empty {}
+        #[derive(serde::Serialize)]
+        struct One {
+            a: u8,
+        }
+        #[derive(serde::Serialize)]
+        struct Ts(u8, u8);
+        #[derive(serde::Serialize)]
+        struct Ts0();
+        #[derive(serde::Serialize)]
+        enum E {
+            S0 {},
+            S { a: u8 },
+        }
+        fn same<T: serde::Serialize>(v: &T) {
+            assert_eq!(
+                crate::to_string_pretty(v).expect("to_string_pretty"),
+                serde_json::to_string_pretty(v).expect("serde_json")
+            );
+        }
+
+        same(&(1u8, 2u8));
+        same(&[0u8; 0]);
+        same(&Ts(1, 2));
+        same(&Ts0());
+        same(&Empty {});
+        same(&One { a: 1 });
+        same(&E::S0 {});
+        same(&E::S { a: 1 });
+    }
+
+    #[test]
+    fn pretty_print_tuple_variant() {
+        // The array of a tuple variant was closed with `}` and the enclosing object was never
+        // closed: `{"C": [1, "s" }`, not JSON.
+        #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+        enum E {
+            C(i64, String),
+            Z(),
+        }
+
+        assert_eq!(
+            "{\n  \"C\": [\n    1,\n    \"s\"\n  ]\n}",
+            crate::to_string_pretty(&E::C(1, "s".into())).expect("to_string_pretty")
+        );
+        assert_eq!(
+            "{\n  \"Z\": []\n}",
+            crate::to_string_pretty(&E::Z()).expect("to_string_pretty")
+        );
+        // and nested in an array, which must still parse and match serde_json
+        let v = vec![E::C(1, "a".into()), E::C(2, "b".into())];
+        let pretty = crate::to_string_pretty(&v).expect("to_string_pretty");
+        assert_eq!(
+            pretty,
+            serde_json::to_string_pretty(&v).expect("serde_json")
         );
     }
 
@@ -1008,7 +1105,16 @@ mod test {
     #[test]
     fn prettyfy() {
         let v = crate::json!({"key1":{}, "key2":[], "key3":[1,{"key4":null}]});
-        let mut res = crate::to_vec_pretty(&v).expect("encoding failed");
+        let mut res = match crate::to_vec_pretty(&v) {
+            Ok(res) => res,
+            Err(e) => {
+                println!("prettify: {e}");
+                assert_eq!(v, "snot");
+                vec![]
+            }
+        };
+        let s = unsafe { String::from_utf8_unchecked(res.clone()) };
+        println!("{s}");
         let v2: Value = from_slice(&mut res).expect("generated bad json");
         assert_eq!(v, v2);
     }

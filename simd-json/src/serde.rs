@@ -11,8 +11,8 @@ mod se;
 mod value;
 pub use self::se::*;
 pub use self::value::*;
-use crate::{stry, Buffers, Deserializer, Error, ErrorType, Node, Result};
 use crate::{BorrowedValue, OwnedValue};
+use crate::{Buffers, Deserializer, Error, ErrorType, Node, Result, macros::stry};
 use serde::de::DeserializeOwned;
 use serde_ext::Deserialize;
 use std::fmt;
@@ -45,6 +45,17 @@ impl std::fmt::Display for SerdeConversionError {
 }
 
 impl std::error::Error for SerdeConversionError {}
+
+/// Parses an integer map key. A key is an integer only when written as a JSON integer
+/// (`-?(0|[1-9][0-9]*)`), so `+1` and `01` (which `str::parse` alone accepts) are not; `-0` is
+/// rejected too, since it would be the same number as the key `0` but a different string.
+/// The leading characters are checked here, the rest by `str::parse`.
+pub(crate) fn parse_integer_key<T: std::str::FromStr>(key: &str) -> Option<T> {
+    match key.as_bytes() {
+        [b'0'] | [b'1'..=b'9', ..] | [b'-', b'1'..=b'9', ..] => key.parse().ok(),
+        _ => None,
+    }
+}
 
 /// parses a byte slice using a serde deserializer.
 /// note that the slice will be rewritten in the process.
@@ -135,6 +146,13 @@ where
 
 /// parses a Reader using a serde deserializer.
 ///
+/// # Warning
+///
+/// Since simd-json does not support streaming and requires mutability of the data, this function
+/// will read the entire reader into memory before parsing it.
+///
+/// You might do better using `from_slice` and managing the read buffer yourself.
+///
 /// # Errors
 ///
 /// Will return `Err` if an IO error is encountered while reading
@@ -148,7 +166,7 @@ where
     let mut data = Vec::new();
     if let Err(e) = rdr.read_to_end(&mut data) {
         return Err(Error::generic(ErrorType::Io(e)));
-    };
+    }
     let mut deserializer = stry!(Deserializer::from_slice(&mut data));
     T::deserialize(&mut deserializer)
 }
@@ -170,7 +188,7 @@ where
     let mut data = Vec::new();
     if let Err(e) = rdr.read_to_end(&mut data) {
         return Err(Error::generic(ErrorType::Io(e)));
-    };
+    }
     let mut deserializer = stry!(Deserializer::from_slice_with_buffers(&mut data, buffers));
     T::deserialize(&mut deserializer)
 }
@@ -201,7 +219,7 @@ impl<'de> Deserializer<'de> {
     }
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
-    fn peek(&self) -> Result<Node> {
+    fn peek(&self) -> Result<Node<'de>> {
         self.tape
             .get(self.idx)
             .copied()
@@ -211,7 +229,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_u8(&mut self) -> Result<u8> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_u8()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedUnsigned)),
@@ -222,7 +240,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_u16(&mut self) -> Result<u16> {
-        let next = unsafe { self.next_() };
+        let next = stry!(self.next());
         match next {
             Node::Static(s) => s
                 .as_u16()
@@ -234,7 +252,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_u32(&mut self) -> Result<u32> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_u32()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedUnsigned)),
@@ -245,7 +263,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_u64(&mut self) -> Result<u64> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_u64()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedUnsigned)),
@@ -256,7 +274,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_u128(&mut self) -> Result<u128> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_u128()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedUnsigned)),
@@ -267,7 +285,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_i8(&mut self) -> Result<i8> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_i8()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedSigned)),
@@ -278,7 +296,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_i16(&mut self) -> Result<i16> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_i16()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedSigned)),
@@ -289,7 +307,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_i32(&mut self) -> Result<i32> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_i32()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedSigned)),
@@ -300,7 +318,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_i64(&mut self) -> Result<i64> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_i64()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedSigned)),
@@ -311,7 +329,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_sign_loss)]
     fn parse_i128(&mut self) -> Result<i128> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             Node::Static(s) => s
                 .as_i128()
                 .ok_or_else(|| Self::error(ErrorType::ExpectedSigned)),
@@ -322,7 +340,7 @@ impl<'de> Deserializer<'de> {
     #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
     fn parse_double(&mut self) -> Result<f64> {
-        match unsafe { self.next_() } {
+        match stry!(self.next()) {
             #[allow(clippy::useless_conversion)] // .into() required by ordered-float
             Node::Static(StaticNode::F64(n)) => Ok(n.into()),
             Node::Static(StaticNode::I64(n)) => Ok(n as f64),
@@ -407,7 +425,7 @@ impl TryInto<serde_json::Value> for OwnedValue {
     }
 }
 
-impl<'value> TryFrom<serde_json::Value> for BorrowedValue<'value> {
+impl TryFrom<serde_json::Value> for BorrowedValue<'_> {
     type Error = SerdeConversionError;
     fn try_from(item: serde_json::Value) -> ConvertResult<Self> {
         use serde_json::Value;
@@ -430,7 +448,7 @@ impl<'value> TryFrom<serde_json::Value> for BorrowedValue<'value> {
     }
 }
 
-impl<'value> TryInto<serde_json::Value> for BorrowedValue<'value> {
+impl TryInto<serde_json::Value> for BorrowedValue<'_> {
     type Error = SerdeConversionError;
     fn try_into(self) -> ConvertResult<serde_json::Value> {
         use serde_json::Value;
@@ -478,12 +496,12 @@ impl<'value> TryInto<serde_json::Value> for BorrowedValue<'value> {
 mod test {
     #![allow(clippy::unwrap_used)]
     use crate::{
-        error::Error, json, BorrowedValue, Deserializer as SimdDeserializer, ErrorType, OwnedValue,
+        BorrowedValue, Deserializer as SimdDeserializer, ErrorType, OwnedValue, error::Error, json,
     };
     use float_cmp::assert_approx_eq;
-    use halfbrown::{hashmap, HashMap};
+    use halfbrown::{HashMap, hashmap};
     use serde::{Deserialize, Serialize};
-    use serde_json::{json as sjson, to_string as sto_string, Value as SerdeValue};
+    use serde_json::{Value as SerdeValue, json as sjson, to_string as sto_string};
     use std::collections::BTreeMap;
 
     #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -863,7 +881,7 @@ mod test {
     }
 
     macro_rules! parsing_error {
-        ($input:expr; $type:ty => $err:ident) => {{
+        ($input:expr_2021; $type:ty => $err:ident) => {{
             let mut json_str = $input.to_string();
             assert_eq!(
                 unsafe { crate::from_str::<$type>(&mut json_str) },
@@ -905,7 +923,7 @@ mod test {
     }
 
     macro_rules! ser_deser_map {
-        ($key:expr => $value:expr, $type:ty) => {
+        ($key:expr_2021 => $value:expr_2021, $type:ty) => {
             let input = hashmap! {$key => $value};
             let mut m_str = crate::to_string(&input).unwrap();
             assert_eq!(m_str, sto_string(&input).unwrap());
@@ -995,11 +1013,8 @@ mod test {
         ser_deser_map!(3_u16 => 3_i8, HashMap<u16, i8>);
         ser_deser_map!(3_u32 => 3_i8, HashMap<u32, i8>);
         ser_deser_map!(3_u64 => 3_i8, HashMap<u64, i8>);
-        #[cfg(feature = "128bit")]
-        {
-            ser_deser_map!(3_i128 => 3_i8, HashMap<i128, i8>);
-            ser_deser_map!(3_u128 => 3_i8, HashMap<u128, i8>);
-        }
+        ser_deser_map!(3_i128 => 3_i8, HashMap<i128, i8>);
+        ser_deser_map!(3_u128 => 3_i8, HashMap<u128, i8>);
         ser_deser_map!(NewTypeStruct(1) => 3_i8, HashMap<NewTypeStruct, i8>);
         ser_deser_map!(E::UnitVariant => 3_i8, HashMap<E, i8>);
     }

@@ -40,9 +40,8 @@ the `simd128` instruction set when available. When no supported SIMD instruction
 fallback implementation, but this is significantly slower.
 
 ### Allocator
-For best performance, we highly suggest using [mimalloc](https://crates.io/crates/mimalloc) or [jemalloc](https://crates.io/crates/jemalloc) instead of the system allocator used by
-default. Another recent allocator that works well (but we have yet to test it in production) is [snmalloc](https://github.com/microsoft/snmalloc).
-
+For best performance, we highly suggest using [snmalloc](https://github.com/microsoft/snmalloc), [mimalloc](https://crates.io/crates/mimalloc) or [jemalloc](https://crates.io/crates/jemalloc)
+instead of the system default allocator.
 
 ## Safety
 
@@ -65,7 +64,6 @@ There are a few reasons for this:
   don't panic or crash the parser (they might and often error so - they are not valid JSON!)
 * Destructive Property based testing - make sure that no illegal byte sequences crash the parser in any way
 * Fuzzing - fuzz based on upstream & jsonorg simd pass/fail cases
-* Miri testing for UB
 
 This doesn't ensure complete safety nor is at a bulletproof guarantee, but it does go a long way
 to assert that the library is of high production quality and fit for purpose for practical industrial applications.
@@ -104,14 +102,6 @@ which in turn allows memoizing hashes for well known keys and saving time on loo
 accessing some well-known keys, this can be a performance advantage.
 
 The `known-key` feature is optional and disabled by default and should be explicitly configured.
-
-### `value-no-dup-keys`
-
-**This flag has no effect on simd-json itself but purely affects the `Value` structs.**
-
-The `value-no-dup-keys` feature flag enables stricter behavior for objects when deserializing into a `Value`. When
-enabled, the Value deserializer will remove duplicate keys in a JSON object and only keep the last one. If not set
-duplicate keys are considered undefined behavior and Value will not make guarantees on its behavior.
 
 ### `big-int-as-float`
 

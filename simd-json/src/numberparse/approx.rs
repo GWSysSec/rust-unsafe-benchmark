@@ -2,9 +2,11 @@ use super::{
     is_integer, is_made_of_eight_digits_fast,
     is_not_structural_or_whitespace_or_exponent_or_decimal, parse_eight_digits_unrolled,
 };
-use crate::charutils::is_structural_or_whitespace;
-use crate::safer_unchecked::GetSaferUnchecked;
 use crate::StaticNode;
+use crate::charutils::is_structural_or_whitespace;
+#[allow(unused_imports)]
+use crate::macros::{static_cast_i64, unlikely};
+use crate::safer_unchecked::GetSaferUnchecked;
 use crate::{Deserializer, ErrorType, Result};
 
 const POWER_OF_TEN: [f64; 632] = [
@@ -59,7 +61,7 @@ const POWER_OF_TEN: [f64; 632] = [
     1e303, 1e304, 1e305, 1e306, 1e307, 1e308,
 ];
 
-impl<'de> Deserializer<'de> {
+impl Deserializer<'_> {
     /// called by `parse_number` when we know that the output is a float,
     /// but where there might be some integer overflow. The trick here is to
     /// parse using floats from the start.
@@ -335,7 +337,7 @@ impl<'de> Deserializer<'de> {
                 ErrorType::InvalidNumber,
             ))
         } else if negative {
-            let i = unsafe { static_cast_i128!(i.wrapping_neg()) };
+            let i: i128 = i.wrapping_neg().cast_signed();
             if let Ok(i) = i64::try_from(i) {
                 Ok(StaticNode::I64(i))
             } else {
@@ -396,17 +398,9 @@ impl<'de> Deserializer<'de> {
             // we rarely see large integer parts like 123456789
             while is_integer(d) {
                 digit = d - b'0';
-                i = i.wrapping_mul(10);
-                if let Some(i1) = i.checked_add(u64::from(digit)) {
-                    i = i1;
-                } else {
-                    return Err(Self::error_c(
-                        idx + byte_count,
-                        d as char,
-                        ErrorType::Overflow,
-                    ));
-                }
-                //i = 10 * i + u64::from(digit); // might overflow
+                // may wrap: overflowing needs 20+ digits, and those take the
+                // `parse_float` / `parse_large_integer` paths below, which re-parse
+                i = i.wrapping_mul(10).wrapping_add(u64::from(digit));
                 byte_count += 1;
                 d = unsafe { *buf.get_kinda_unchecked(byte_count) };
             }
@@ -460,8 +454,8 @@ impl<'de> Deserializer<'de> {
         } else {
             0
         };
-        let mut expnumber: i16 = 0; // exponential part
-        if (d == b'e') || (d == b'E') {
+        let has_exponent = (d == b'e') || (d == b'E');
+        if has_exponent {
             ignore_count += 1;
             byte_count += 1;
             d = unsafe { *buf.get_kinda_unchecked(byte_count) };
@@ -484,7 +478,7 @@ impl<'de> Deserializer<'de> {
                 ));
             }
             digit = d - b'0';
-            expnumber = i16::from(digit);
+            let mut expnumber = i16::from(digit); // exponential part
             byte_count += 1;
             ignore_count += 1;
             d = unsafe { *buf.get_kinda_unchecked(byte_count) };
@@ -512,7 +506,8 @@ impl<'de> Deserializer<'de> {
             }
             exponent += i64::from(if negexp { -expnumber } else { expnumber });
         }
-        let v = if (exponent != 0) || (expnumber != 0) {
+        // `1e0` is a float too, even though its exponent sums to zero
+        let v = if (exponent != 0) || has_exponent {
             if unlikely!((byte_count - ignore_count as usize) >= 19) {
                 // this is uncommon!!!
                 // this is almost never going to get called!!!
@@ -531,7 +526,7 @@ impl<'de> Deserializer<'de> {
 
                 let mut d1: f64 = i as f64;
                 d1 *= unsafe { POWER_OF_TEN.get_kinda_unchecked((323 + exponent) as usize) };
-                StaticNode::from(if negative { d1 * -1.0 } else { d1 })
+                StaticNode::from(if negative { -d1 } else { d1 })
             }
         } else {
             if unlikely!(byte_count >= 18) {
@@ -559,108 +554,116 @@ impl<'de> Deserializer<'de> {
 #[cfg(test)]
 mod test {
     #![allow(clippy::default_trait_access)]
+    use crate::error::Error;
+    use crate::value::owned::Value;
     use crate::value::owned::to_value;
     use float_cmp::approx_eq;
     use value_trait::prelude::*;
 
+    fn to_value_from_str(buf: &str) -> Result<Value, Error> {
+        let mut val = String::from(buf);
+        let val = unsafe { val.as_bytes_mut() };
+        to_value(val)
+    }
+
     #[test]
     fn bad_exp() {
         let mut too_big = String::from("1e309");
-        let mut too_big = unsafe { too_big.as_bytes_mut() };
-        let v_too_big = to_value(&mut too_big);
+        let too_big = unsafe { too_big.as_bytes_mut() };
+        let v_too_big = to_value(too_big);
         assert!(v_too_big.is_err());
         let mut too_small = String::from("1e-324");
-        let mut too_small = unsafe { too_small.as_bytes_mut() };
-        let v_too_small = to_value(&mut too_small);
+        let too_small = unsafe { too_small.as_bytes_mut() };
+        let v_too_small = to_value(too_small);
         assert!(v_too_small.is_err());
         let mut too_big = String::from("1e1000");
-        let mut too_big = unsafe { too_big.as_bytes_mut() };
-        let v_too_big = to_value(&mut too_big);
+        let too_big = unsafe { too_big.as_bytes_mut() };
+        let v_too_big = to_value(too_big);
         assert!(v_too_big.is_err());
         let mut too_small = String::from("1e-1000");
-        let mut too_small = unsafe { too_small.as_bytes_mut() };
-        let v_too_small = to_value(&mut too_small);
+        let too_small = unsafe { too_small.as_bytes_mut() };
+        let v_too_small = to_value(too_small);
         assert!(v_too_small.is_err());
 
         let mut too_big = String::from("100000000000000000000000000000000000000000000e309");
-        let mut too_big = unsafe { too_big.as_bytes_mut() };
-        let v_too_big = to_value(&mut too_big);
+        let too_big = unsafe { too_big.as_bytes_mut() };
+        let v_too_big = to_value(too_big);
         assert!(v_too_big.is_err());
         let mut too_small = String::from("100000000000000000000000000000000000000000000e-324");
-        let mut too_small = unsafe { too_small.as_bytes_mut() };
-        let v_too_small = to_value(&mut too_small);
+        let too_small = unsafe { too_small.as_bytes_mut() };
+        let v_too_small = to_value(too_small);
         assert!(v_too_small.is_err());
         let mut too_big = String::from("100000000000000000000000000000000000000000000e1000");
-        let mut too_big = unsafe { too_big.as_bytes_mut() };
-        let v_too_big = to_value(&mut too_big);
+        let too_big = unsafe { too_big.as_bytes_mut() };
+        let v_too_big = to_value(too_big);
         assert!(v_too_big.is_err());
         let mut too_small = String::from("100000000000000000000000000000000000000000000e-1000");
-        let mut too_small = unsafe { too_small.as_bytes_mut() };
-        let v_too_small = to_value(&mut too_small);
+        let too_small = unsafe { too_small.as_bytes_mut() };
+        let v_too_small = to_value(too_small);
         assert!(v_too_small.is_err());
     }
 
     #[test]
     fn bad_dot() {
         let mut i = String::from("1.");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("1.e");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("100000000000000000000000000000000000000000000.");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("100000000000000000000000000000000000000000000.e");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
     }
 
     #[test]
     fn bad_e() {
         let mut i = String::from("1.0e");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("1.0e");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("100000000000000000000000000000000000000000000.0e");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
         let mut i = String::from("100000000000000000000000000000000000000000000.0ee");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert!(r.is_err());
     }
 
     #[test]
     fn zero() {
         let mut i = String::from("0");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i);
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i);
         assert_eq!(r.expect("0"), 0);
     }
 
     #[test]
     fn float_zero() {
         let mut i = String::from("0e1");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i).expect("failed to decode");
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i).expect("failed to decode");
         assert!(approx_eq!(f64, r.as_f64().expect("float"), 0.0));
     }
 
     #[test]
     fn minus_309() {
         let mut i = String::from("-5.96916642387374e-309");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i).expect("failed to decode");
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i).expect("failed to decode");
         assert!(approx_eq!(
             f64,
             r.as_f64().expect("float"),
@@ -670,9 +673,98 @@ mod test {
     #[allow(clippy::unreadable_literal)]
     #[test]
     fn tiny_float() {
-        let mut i = String::from("-0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000596916642387374");
-        let mut i = unsafe { i.as_bytes_mut() };
-        let r = to_value(&mut i).expect("failed to decode");
+        let mut i = String::from(
+            "-0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000596916642387374",
+        );
+        let i = unsafe { i.as_bytes_mut() };
+        let r = to_value(i).expect("failed to decode");
         assert!(approx_eq!(f64, r.as_f64().expect("float"), -0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000596916642387374));
+    }
+
+    #[test]
+    fn int_trailing_invalid() {
+        // The byte terminating an integer must be structural-or-whitespace. An
+        // embedded NUL, a trailing letter or a digit separator are none of those
+        // and must be rejected.
+        assert!(to_value_from_str("123\x00").is_err());
+        assert!(to_value_from_str("[123\x00]").is_err());
+        assert!(to_value_from_str("123a").is_err());
+        assert!(to_value_from_str("1a").is_err());
+        assert!(to_value_from_str("[123a]").is_err());
+        assert!(to_value_from_str("[1a]").is_err());
+        // digit separators (e.g. Rust's `1_000`) are not valid JSON
+        assert!(to_value_from_str("1_000").is_err());
+    }
+
+    #[test]
+    fn int_leading_zero() {
+        // JSON forbids leading zeroes: a `0` may only be followed by a
+        // structural/whitespace/exponent/decimal byte, never another digit.
+        assert!(to_value_from_str("01").is_err());
+        assert!(to_value_from_str("00").is_err());
+        assert!(to_value_from_str("012").is_err());
+        assert!(to_value_from_str("0123").is_err());
+        assert!(to_value_from_str("-01").is_err());
+        assert!(to_value_from_str("-00").is_err());
+        assert!(to_value_from_str("[01]").is_err());
+        assert!(to_value_from_str("[-01]").is_err());
+    }
+
+    #[test]
+    fn int_zero_prefix() {
+        // A `0` followed by a base prefix (hex/binary/octal) is not valid JSON.
+        assert!(to_value_from_str("0x1").is_err());
+        assert!(to_value_from_str("0X1").is_err());
+        assert!(to_value_from_str("0b1").is_err());
+        assert!(to_value_from_str("0o1").is_err());
+        assert!(to_value_from_str("[0x1]").is_err());
+    }
+
+    #[test]
+    fn int_bare_sign() {
+        // A `-` must be followed by a digit.
+        assert!(to_value_from_str("-").is_err());
+        assert!(to_value_from_str("-x").is_err());
+        assert!(to_value_from_str("-e5").is_err());
+        assert!(to_value_from_str("-.5").is_err());
+    }
+
+    #[test]
+    fn int_bad_exponent() {
+        // An integer carrying an exponent marker still needs at least one
+        // exponent digit; a bare sign after `e`/`E` is not enough.
+        assert!(to_value_from_str("1e").is_err());
+        assert!(to_value_from_str("2E").is_err());
+        assert!(to_value_from_str("1e+").is_err());
+        assert!(to_value_from_str("1e-").is_err());
+        assert!(to_value_from_str("9e+").is_err());
+        assert!(to_value_from_str("[1e]").is_err());
+        assert!(to_value_from_str("[9e-]").is_err());
+    }
+
+    #[test]
+    fn long_int_boundaries() -> Result<(), crate::Error> {
+        // 18/19-digit integers take the cold `parse_large_integer` path; check
+        // its success boundaries and the Overflow errors just past them.
+        assert_eq!(
+            to_value_from_str("-999999999999999999")?,
+            -999_999_999_999_999_999_i64
+        );
+        assert_eq!(
+            to_value_from_str("-9223372036854775807")?,
+            -9_223_372_036_854_775_807_i64
+        );
+        assert_eq!(to_value_from_str("-9223372036854775808")?, i64::MIN);
+        assert_eq!(to_value_from_str("18446744073709551615")?, u64::MAX);
+        // Without a wider integer target, values past i64::MIN / u64::MAX overflow.
+        // `128bit` widens the target and `big-int-as-float` reinterprets them, so
+        // the error only holds when neither is enabled.
+        #[cfg(not(any(feature = "128bit", feature = "big-int-as-float")))]
+        {
+            assert!(to_value_from_str("-9223372036854775809").is_err());
+            assert!(to_value_from_str("18446744073709551616").is_err());
+            assert!(to_value_from_str("99999999999999999999").is_err());
+        }
+        Ok(())
     }
 }

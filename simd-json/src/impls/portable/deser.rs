@@ -1,16 +1,17 @@
-use std::simd::{u8x32, SimdPartialEq, ToBitMask};
+use std::mem::MaybeUninit;
+use std::simd::{SimdPartialEq, ToBitMask, u8x32};
 
 use crate::{
+    Deserializer, ErrorType, InputView, Result, SillyWrapper,
     safer_unchecked::GetSaferUnchecked,
-    stringparse::{handle_unicode_codepoint, ESCAPE_MAP},
-    Deserializer, ErrorType, Result, SillyWrapper,
+    stringparse::{ESCAPE_MAP, handle_unicode_codepoint},
 };
 
 #[cfg_attr(not(feature = "no-inline"), inline)]
-pub(crate) unsafe fn parse_str<'invoke, 'de>(
+pub(crate) unsafe fn parse_str<'de>(
     input: SillyWrapper<'de>,
-    data: &'invoke [u8],
-    buffer: &'invoke mut [u8],
+    data: InputView,
+    buffer: &mut [MaybeUninit<u8>],
     mut idx: usize,
 ) -> Result<&'de str> {
     let input = input.input;
@@ -26,7 +27,7 @@ pub(crate) unsafe fn parse_str<'invoke, 'de>(
     // This is safe since we check sub's length in the range access above and only
     // create sub sliced form sub to `sub.len()`.
 
-    let src: &[u8] = data.get_kinda_unchecked(idx..);
+    let src: &[u8] = data.tail(idx);
     let mut src_i: usize = 0;
     let mut len = src_i;
     loop {
@@ -102,7 +103,7 @@ pub(crate) unsafe fn parse_str<'invoke, 'de>(
             dst_i += quote_dist as usize;
             input
                 .add(idx + len)
-                .copy_from_nonoverlapping(buffer.as_ptr(), dst_i);
+                .copy_from_nonoverlapping(buffer.as_ptr().cast::<u8>(), dst_i);
             let v = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
                 input.add(idx),
                 len + dst_i,
@@ -132,10 +133,6 @@ pub(crate) unsafe fn parse_str<'invoke, 'de>(
                     buffer.get_kinda_unchecked_mut(dst_i..),
                 )
                 .map_err(|_| Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint))?;
-
-                if o == 0 {
-                    return Err(Deserializer::error_c(src_i, 'u', InvalidUnicodeCodepoint));
-                };
                 // We moved o steps forward at the destination and 6 on the source
                 src_i += s;
                 dst_i += o;
@@ -152,7 +149,9 @@ pub(crate) unsafe fn parse_str<'invoke, 'de>(
                         InvalidEscape,
                     ));
                 }
-                *buffer.get_kinda_unchecked_mut(dst_i + bs_dist as usize) = escape_result;
+                buffer
+                    .get_kinda_unchecked_mut(dst_i + bs_dist as usize)
+                    .write(escape_result);
                 src_i += bs_dist as usize + 2;
                 dst_i += bs_dist as usize + 1;
             }

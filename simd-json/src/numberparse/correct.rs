@@ -6,19 +6,21 @@ use super::{is_integer, is_not_structural_or_whitespace_or_exponent_or_decimal};
 #[cfg(feature = "swar-number-parsing")]
 use super::{is_made_of_eight_digits_fast, parse_eight_digits_unrolled};
 
+use crate::StaticNode;
 use crate::charutils::is_structural_or_whitespace;
 use crate::error::Error;
+#[allow(unused_imports)]
+use crate::macros::{static_cast_i64, unlikely};
 use crate::safer_unchecked::GetSaferUnchecked;
-use crate::StaticNode;
 use crate::{Deserializer, ErrorType, Result};
 
 macro_rules! get {
-    ($buf:ident, $idx:expr) => {
+    ($buf:ident, $idx:expr_2021) => {
         unsafe { *$buf.get_kinda_unchecked($idx as usize) }
     };
 }
 macro_rules! err {
-    ($idx:ident, $num:expr) => {
+    ($idx:ident, $num:expr_2021) => {
         return Err(Error::new_c($idx, $num as char, ErrorType::InvalidNumber))
     };
 }
@@ -48,7 +50,8 @@ fn multiply_as_u128(a: u64, b: u64) -> (u64, u64) {
     (res as u64, (res >> 64) as u64)
 }
 
-impl<'de> Deserializer<'de> {
+impl Deserializer<'_> {
+    #[cfg_attr(not(feature = "no-inline"), inline)]
     #[allow(
         unused_unsafe,
         clippy::cast_possible_wrap,
@@ -77,6 +80,11 @@ impl<'de> Deserializer<'de> {
             }
             num = u64::from(get!(buf, idx) - b'0');
             idx += 1;
+            // an 8-digit SWAR block loop here (like the fraction
+            // path below) was tried and measured a net loss: float-heavy data
+            // (canada.json) pays the failed block check on every 1-3-digit
+            // integer part (+3.8%), while long-id data (twitter) only gained
+            // ~0.7%.
             while is_integer(get!(buf, idx)) {
                 num = 10_u64
                     .wrapping_mul(num)
@@ -119,7 +127,11 @@ impl<'de> Deserializer<'de> {
             }
             exponent = first_after_period.wrapping_sub(idx as i64);
         }
-        let mut digit_count = idx - start_idx - 1;
+        // Number of digit-ish characters, excluding the sign: previously
+        // the '-' was counted, pushing 18-digit negative integers (which fit
+        // an i64 comfortably: < 10^18 <= i64::MAX) onto the cold
+        // `parse_large_integer` path.
+        let mut digit_count = idx - start_idx - 1 - usize::from(negative);
         match get!(buf, idx) {
             b'e' | b'E' => {
                 is_float = true;
@@ -152,23 +164,33 @@ impl<'de> Deserializer<'de> {
                     idx += 1;
                 }
                 while is_integer(get!(buf, idx)) {
-                    if exp_number > 0x0001_0000_0000 {
-                        err!(idx, get!(buf, idx))
+                    // Any exponent this large is far outside the f64 range: the number is
+                    // 0 or infinite whatever further digits follow, so stop growing it
+                    // (no overflow) but keep consuming digits. RFC 8259 puts no limit on
+                    // the exponent; `0e99999999999` and `1e-99999999999` are zero.
+                    if exp_number <= 0x0001_0000_0000 {
+                        exp_number = 10 * exp_number + i64::from(get!(buf, idx) - b'0');
                     }
-                    exp_number = 10 * exp_number + i64::from(get!(buf, idx) - b'0');
                     idx += 1;
                 }
                 exponent += if neg_exp { -exp_number } else { exp_number };
             }
             _ => {}
         }
+        // The byte terminating the number must be structural-or-whitespace.
+        // Checked here, before dispatching, so it also covers the cold
+        // `parse_large_integer` and `f64_from_parts_slow` paths below, which
+        // do not re-validate the terminator themselves.
+        if is_structural_or_whitespace(get!(buf, idx)) == 0 {
+            err!(idx, get!(buf, idx))
+        }
         if is_float {
             if unlikely!(digit_count >= 19) {
-                let start_digits = get!(buf, start) as usize;
+                let orig_start = start;
                 while get!(buf, start) == b'0' || get!(buf, start) == b'.' {
                     start += 1;
                 }
-                digit_count = digit_count.wrapping_sub(start.wrapping_sub(start_digits));
+                digit_count = digit_count.wrapping_sub(start.wrapping_sub(orig_start));
                 if digit_count >= 19 {
                     return f64_from_parts_slow(
                         unsafe { buf.get_kinda_unchecked(start_idx..idx) },
@@ -176,20 +198,15 @@ impl<'de> Deserializer<'de> {
                     );
                 }
             }
-            if is_structural_or_whitespace(get!(buf, idx)) == 0 {
-                err!(idx, get!(buf, idx))
-            }
             f64_from_parts(
                 !negative,
                 num,
-                exponent as i32,
+                exponent,
                 unsafe { buf.get_kinda_unchecked(start_idx..idx) },
                 start_idx,
             )
         } else if unlikely!(digit_count >= 18) {
             parse_large_integer(start_idx, buf, negative, idx)
-        } else if is_structural_or_whitespace(get!(buf, idx)) == 0 {
-            err!(idx, get!(buf, idx))
         } else {
             Ok(if negative {
                 StaticNode::I64(unsafe { static_cast_i64!(num.wrapping_neg()) })
@@ -237,7 +254,10 @@ fn parse_large_integer(
     }
     match (negative, num) {
         (true, 9_223_372_036_854_775_808) => Ok(StaticNode::I64(i64::MIN)),
-        (true, 9_223_372_036_854_775_809..=u64::MAX) => err!(idx, get!(buf, idx)),
+        (true, 9_223_372_036_854_775_809..=u64::MAX) => {
+            check_overflow!(true, buf, idx, start_idx, end_index);
+            err!(idx, get!(buf, idx))
+        }
         (true, 0..=9_223_372_036_854_775_807) => Ok(StaticNode::I64(-(num as i64))),
         (false, _) => Ok(StaticNode::U64(num)),
     }
@@ -310,7 +330,8 @@ fn parse_large_integer(
 fn f64_from_parts(
     positive: bool,
     significand: u64,
-    exponent: i32,
+    // i64, as accumulated by the parser: narrowing it could wrap a huge exponent into range
+    exponent: i64,
     slice: &[u8],
     offset: usize,
 ) -> Result<StaticNode> {
@@ -399,9 +420,9 @@ fn f64_from_parts_slow(slice: &[u8], offset: usize) -> Result<StaticNode> {
 mod test {
     #![allow(clippy::default_trait_access)]
     use crate::error::Error;
-    use crate::value::owned::to_value;
     use crate::value::owned::Value;
     use crate::value::owned::Value::Static;
+    use crate::value::owned::to_value;
     use value_trait::StaticNode::{self, I64, U64};
 
     fn to_value_from_str(buf: &str) -> Result<Value, Error> {
@@ -478,9 +499,63 @@ mod test {
 
     #[test]
     fn int_trailing_invalid() {
-        // todo: these should fail but is not distinguished from trailing padding
-        assert!(to_value_from_str("123\x00").is_ok());
-        assert!(to_value_from_str("[123\x00]").is_ok());
+        // The byte terminating an integer must be structural-or-whitespace. An
+        // embedded NUL, a trailing letter or a digit separator are none of those
+        // and must be rejected.
+        assert!(to_value_from_str("123\x00").is_err());
+        assert!(to_value_from_str("[123\x00]").is_err());
+        assert!(to_value_from_str("123a").is_err());
+        assert!(to_value_from_str("1a").is_err());
+        assert!(to_value_from_str("[123a]").is_err());
+        assert!(to_value_from_str("[1a]").is_err());
+        // digit separators (e.g. Rust's `1_000`) are not valid JSON
+        assert!(to_value_from_str("1_000").is_err());
+    }
+
+    #[test]
+    fn int_leading_zero() {
+        // JSON forbids leading zeroes: a `0` may only be followed by a
+        // structural/whitespace/exponent/decimal byte, never another digit.
+        assert!(to_value_from_str("01").is_err());
+        assert!(to_value_from_str("00").is_err());
+        assert!(to_value_from_str("012").is_err());
+        assert!(to_value_from_str("0123").is_err());
+        assert!(to_value_from_str("-01").is_err());
+        assert!(to_value_from_str("-00").is_err());
+        assert!(to_value_from_str("[01]").is_err());
+        assert!(to_value_from_str("[-01]").is_err());
+    }
+
+    #[test]
+    fn int_zero_prefix() {
+        // A `0` followed by a base prefix (hex/binary/octal) is not valid JSON.
+        assert!(to_value_from_str("0x1").is_err());
+        assert!(to_value_from_str("0X1").is_err());
+        assert!(to_value_from_str("0b1").is_err());
+        assert!(to_value_from_str("0o1").is_err());
+        assert!(to_value_from_str("[0x1]").is_err());
+    }
+
+    #[test]
+    fn int_bare_sign() {
+        // A `-` must be followed by a digit.
+        assert!(to_value_from_str("-").is_err());
+        assert!(to_value_from_str("-x").is_err());
+        assert!(to_value_from_str("-e5").is_err());
+        assert!(to_value_from_str("-.5").is_err());
+    }
+
+    #[test]
+    fn int_bad_exponent() {
+        // An integer carrying an exponent marker still needs at least one
+        // exponent digit; a bare sign after `e`/`E` is not enough.
+        assert!(to_value_from_str("1e").is_err());
+        assert!(to_value_from_str("2E").is_err());
+        assert!(to_value_from_str("1e+").is_err());
+        assert!(to_value_from_str("1e-").is_err());
+        assert!(to_value_from_str("9e+").is_err());
+        assert!(to_value_from_str("[1e]").is_err());
+        assert!(to_value_from_str("[9e-]").is_err());
     }
 
     #[test]
@@ -528,6 +603,66 @@ mod test {
     }
 
     #[test]
+    fn huge_exponent() -> Result<(), crate::Error> {
+        // RFC 8259 §6 puts no limit on the exponent. A zero significand or an exponent far
+        // below the f64 range is zero, however many exponent digits there are.
+        for (input, expected) in [
+            ("0e99999999999", 0.0),
+            ("-0e99999999999", -0.0),
+            ("0E4294967297", 0.0),
+            ("0e+99999999999", 0.0),
+            ("1e+00000000000000000000", 1.0),
+            ("1e-00000000000000000001", 0.1),
+            ("2e-44444044280", 0.0),
+            ("1e-99999999999", 0.0),
+            ("-1e-99999999999", -0.0),
+            ("1e-4294967295", 0.0),
+            ("1.5e-8589934592", 0.0),
+            ("0.1e-9223372036854775808", 0.0),
+        ] {
+            let v = to_value_from_str(input)?;
+            let Static(StaticNode::F64(f)) = v else {
+                panic!("{input} parsed as {v:?}");
+            };
+            assert_eq!(
+                f.to_bits(),
+                f64::to_bits(expected),
+                "{input} parsed as {f:?}"
+            );
+        }
+        assert_eq!(
+            to_value_from_str("[1e-99999999999,2]")?,
+            crate::OwnedValue::Array(Box::new(vec![
+                Static(StaticNode::from(0.0)),
+                Static(U64(2))
+            ]))
+        );
+        // ... and anything far above it is out of range (an error, as for 1e309), never a
+        // wrapped-around finite value.
+        for input in [
+            "1e4294967296",
+            "1e4294967295",
+            "1e2147483648",
+            "1e99999999999",
+            "1e+99999999999",
+        ] {
+            assert!(to_value_from_str(input).is_err(), "{input}");
+        }
+        // a saturated exponent still ends at the first non-digit: trailing garbage is an error
+        for input in [
+            "0e99999999999x",
+            "0e+99999999999x",
+            "1e-99999999999x",
+            "0e99999999999.5",
+            "[0e99999999999x]",
+            "0e99999999999e1",
+        ] {
+            assert!(to_value_from_str(input).is_err(), "{input}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn nan() {
         assert!(to_value_from_str("NaN").is_err());
         assert!(to_value_from_str("nan").is_err());
@@ -563,10 +698,47 @@ mod test {
     }
 
     #[test]
+    fn long_int_boundaries() -> Result<(), crate::Error> {
+        // 18-digit negative: fast path (digit_count no longer counts the sign)
+        assert_eq!(
+            to_value_from_str("-999999999999999999")?,
+            Static(I64(-999_999_999_999_999_999))
+        );
+        // 19-digit negatives: cold path, incl. i64::MIN and overflow
+        assert_eq!(
+            to_value_from_str("-9223372036854775807")?,
+            Static(I64(-9_223_372_036_854_775_807))
+        );
+        assert_eq!(
+            to_value_from_str("-9223372036854775808")?,
+            Static(I64(i64::MIN))
+        );
+        #[cfg(not(any(feature = "128bit", feature = "big-int-as-float")))]
+        assert!(to_value_from_str("-9223372036854775809").is_err());
+        // 8-digit-block integer path: 9/16/17/19/20 digits (positive)
+        assert_eq!(to_value_from_str("123456789")?, Static(U64(123_456_789)));
+        assert_eq!(
+            to_value_from_str("1234567890123456")?,
+            Static(U64(1_234_567_890_123_456))
+        );
+        assert_eq!(
+            to_value_from_str("12345678901234567")?,
+            Static(U64(12_345_678_901_234_567))
+        );
+        assert_eq!(
+            to_value_from_str("18446744073709551615")?,
+            Static(U64(u64::MAX))
+        );
+        #[cfg(not(any(feature = "128bit", feature = "big-int-as-float")))]
+        assert!(to_value_from_str("18446744073709551616").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn minus_309() -> Result<(), crate::Error> {
         assert_eq!(
             to_value_from_str("-5.96916642387374e-309")?,
-            Static(StaticNode::from(-5.969_166_423_873_74e-_309))
+            Static(StaticNode::from(-5.969_166_423_873_74e-309))
         );
         Ok(())
     }
@@ -582,7 +754,7 @@ mod test {
     fn huge_int() -> Result<(), crate::Error> {
         assert_eq!(
             to_value_from_str("999999999999999999999999999999")?,
-            StaticNode::from(999999999999999999999999999999f64)
+            Value::from(StaticNode::from(999999999999999999999999999999f64))
         );
         Ok(())
     }

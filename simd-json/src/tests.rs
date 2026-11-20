@@ -7,7 +7,7 @@ mod impls;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::to_borrowed_value;
-use crate::{owned::Value, tape::Node, to_owned_value, Deserializer};
+use crate::{Deserializer, owned::Value, tape::Node, to_owned_value};
 #[cfg(not(target_arch = "wasm32"))]
 use proptest::prelude::*;
 use value_trait::prelude::*;
@@ -24,9 +24,31 @@ fn alligned_number_parse() {
 }
 
 #[test]
+fn null_in_json() {
+    let mut source = Vec::from(b"[-2374611873366417043\0]".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+    let mut source = Vec::from(b"[\"snot\"\0]".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+    let mut source = Vec::from(b"[-1.5e3\0]".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+    let mut source = Vec::from(b"-1.5e3\0".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+    let mut source = Vec::from(b"[\0]".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+    let mut source = Vec::from(b"\0".as_slice());
+    let res = crate::to_borrowed_value(&mut source);
+    assert!(res.is_err());
+}
+
+#[test]
 fn test_send_sync() {
     struct TestStruct<T: Sync + Send>(T);
-    #[allow(clippy::let_underscore_drop)] // test
+    #[allow(let_underscore_drop)] // test
     let _: TestStruct<_> = TestStruct(super::AlignedBuf::with_capacity(0));
 }
 
@@ -127,13 +149,13 @@ fn odd_nuber() {
     let mut d =
         String::from(r#"{"name": "max_unsafe_auto_id_timestamp", "value": -9223372036854776000}"#);
 
-    let mut d = unsafe { d.as_bytes_mut() };
+    let d = unsafe { d.as_bytes_mut() };
     let mut o = Value::object();
     o.insert("name", "max_unsafe_auto_id_timestamp")
         .expect("failed to set key");
     o.insert("value", -9_223_372_036_854_776_000_i128)
         .expect("failed to set key");
-    assert_eq!(to_value(&mut d), Ok(o));
+    assert_eq!(to_value(d), Ok(o));
 }
 
 #[cfg(feature = "128bit")]
@@ -145,13 +167,13 @@ fn odd_nuber2() {
     let mut d =
         String::from(r#"{"name": "max_unsafe_auto_id_timestamp", "value": 9223372036854776000}"#);
 
-    let mut d = unsafe { d.as_bytes_mut() };
+    let d = unsafe { d.as_bytes_mut() };
     let mut o = Value::object();
     o.insert("name", "max_unsafe_auto_id_timestamp")
         .expect("failed to set key");
     o.insert("value", 9_223_372_036_854_776_000_u128)
         .expect("failed to set key");
-    assert_eq!(to_value(&mut d), Ok(o));
+    assert_eq!(to_value(d), Ok(o));
 }
 // How much do we care about this, it's within the same range and
 // based on floating point math imprecisions during parsing.
@@ -166,7 +188,7 @@ fn silly_float1() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "serde is less precise on this test"]
 fn silly_float2() {
     let v = Value::from(-6.990_585_694_841_803e305);
     let s = v.encode();
@@ -174,6 +196,44 @@ fn silly_float2() {
     let parsed = to_owned_value(&mut bytes).expect("failed to parse generated float");
     assert_eq!(v, parsed);
 }
+
+// JSON has no NaN or infinity, so they are written as `null`, like serde_json does.
+#[test]
+fn non_finite_floats_encode_as_null() {
+    for f in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(Value::from(f).encode(), "null", "{f}");
+        #[cfg(feature = "serde_impl")]
+        {
+            assert_eq!(crate::to_string(&f).expect("to_string"), "null", "{f}");
+            assert_eq!(
+                crate::to_string_pretty(&f).expect("to_string_pretty"),
+                "null",
+                "{f}"
+            );
+        }
+    }
+}
+
+// Objects over 32 keys keep only the last of a repeated key.
+#[test]
+fn repeated_key_in_large_object_keeps_last() {
+    let json = format!(
+        "{{{}}}",
+        (0..1000)
+            .map(|i| format!("\"k\":{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut d = json.clone().into_bytes();
+    let v = to_owned_value(&mut d).expect("valid");
+    assert_eq!(v.as_object().expect("object").len(), 1);
+    assert_eq!(v.get_u64("k"), Some(999));
+    let mut d = json.into_bytes();
+    let v = crate::to_borrowed_value(&mut d).expect("valid");
+    assert_eq!(v.as_object().expect("object").len(), 1);
+    assert_eq!(v.get_u64("k"), Some(999));
+}
+
 #[cfg(not(feature = "128bit"))]
 #[cfg(not(target_arch = "wasm32"))]
 fn arb_json_value() -> BoxedStrategy<Value> {
@@ -261,4 +321,70 @@ proptest! {
         }
     }
 
+}
+
+#[test]
+fn high_surrogate_without_a_low_surrogate_is_an_error() {
+    for bad in [
+        r#""\ud800""#,
+        r#""\ud800x""#,
+        r#"["\udbff"]"#,
+        r#"{"k":"a\ud800b"}"#,
+        r#""\ud800\n""#,
+        r#""\ud800\uzzzz""#,
+        r#""\ud800\u0041""#,
+        r#""\ud800\udbff""#,
+        r#""\ud800\ue000""#,
+        r#""\ud800\uffff""#,
+        r#""\udbff\ue000""#,
+        r#""\udbff\uffff""#,
+        r#""\udc00""#,
+    ] {
+        let mut v = bad.as_bytes().to_vec();
+        assert!(crate::to_tape(&mut v).is_err(), "accepted: {bad}");
+        let mut v = bad.as_bytes().to_vec();
+        assert!(crate::to_borrowed_value(&mut v).is_err(), "accepted: {bad}");
+        #[cfg(feature = "serde_impl")]
+        {
+            let mut v = bad.as_bytes().to_vec();
+            assert!(
+                crate::serde::from_slice::<String>(&mut v).is_err(),
+                "accepted: {bad}"
+            );
+        }
+    }
+    for (good, decoded) in [
+        (r#""a\ud83d\ude00b""#, "a\u{1F600}b"),
+        (r#""\ud800\udc00""#, "\u{10000}"),
+        (r#""\udbff\udfff""#, "\u{10FFFF}"),
+    ] {
+        let mut v = good.as_bytes().to_vec();
+        let t = crate::to_tape(&mut v).expect("valid surrogate pair");
+        assert_eq!(t.0[0], crate::Node::String(decoded));
+    }
+}
+
+#[test]
+fn unicode_escape_with_invalid_hex_is_an_error() {
+    for bad in [
+        r#""\uzzzzA""#,
+        r#""\u00zz""#,
+        r#""\uzz00""#,
+        r#""\u004g""#,
+        r#"["\uzzzz"]"#,
+        r#"{"k":"a\uzzzzb"}"#,
+    ] {
+        let mut v = bad.as_bytes().to_vec();
+        assert!(crate::to_tape(&mut v).is_err(), "accepted: {bad}");
+        let mut v = bad.as_bytes().to_vec();
+        assert!(crate::to_borrowed_value(&mut v).is_err(), "accepted: {bad}");
+        #[cfg(feature = "serde_impl")]
+        {
+            let mut v = bad.as_bytes().to_vec();
+            assert!(
+                crate::serde::from_slice::<String>(&mut v).is_err(),
+                "accepted: {bad}"
+            );
+        }
+    }
 }

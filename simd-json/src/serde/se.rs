@@ -7,7 +7,7 @@ use std::str;
 use value_trait::generator::BaseGenerator;
 
 macro_rules! iomap {
-    ($e:expr) => {
+    ($e:expr_2021) => {
         ($e).map_err(|err| Error::generic(ErrorType::Io(err)))
     };
 }
@@ -69,7 +69,7 @@ struct SerializeSeq<'serializer, W: Write + 'serializer> {
     s: &'serializer mut Serializer<W>,
     first: bool,
 }
-impl<'serializer, W> ser::SerializeSeq for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeSeq for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -94,15 +94,11 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.first {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"]"))
-        }
+        iomap!(self.s.write(b"]"))
     }
 }
 
-impl<'serializer, W> ser::SerializeTuple for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTuple for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -126,15 +122,11 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.first {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"]"))
-        }
+        iomap!(self.s.write(b"]"))
     }
 }
 
-impl<'serializer, W> ser::SerializeTupleStruct for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTupleStruct for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -158,15 +150,11 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.first {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"]"))
-        }
+        iomap!(self.s.write(b"]"))
     }
 }
 
-impl<'serializer, W> ser::SerializeTupleVariant for SerializeSeq<'serializer, W>
+impl<W> ser::SerializeTupleVariant for SerializeSeq<'_, W>
 where
     W: Write,
 {
@@ -190,21 +178,16 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.first {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"]}"))
-        }
+        iomap!(self.s.write(b"]}"))
     }
 }
 
 struct SerializeMap<'serializer, W: Write + 'serializer> {
     s: &'serializer mut Serializer<W>,
     first: bool,
-    wrote_closing: bool,
 }
 
-impl<'serializer, W> ser::SerializeMap for SerializeMap<'serializer, W>
+impl<W> ser::SerializeMap for SerializeMap<'_, W>
 where
     W: Write,
 {
@@ -241,11 +224,7 @@ where
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.wrote_closing {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"}"))
-        }
+        iomap!(self.s.write(b"}"))
     }
 }
 
@@ -257,7 +236,7 @@ struct MapKeySerializer<'serializer, W: Write + 'serializer> {
     s: &'serializer mut Serializer<W>,
 }
 
-impl<'serializer, W> ser::Serializer for MapKeySerializer<'serializer, W>
+impl<W> ser::Serializer for MapKeySerializer<'_, W>
 where
     W: Write,
 {
@@ -300,83 +279,93 @@ where
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
-        iomap!(self
-            .s
-            .write_char(b'"')
-            .and_then(|()| self.s.write_int(v))
-            .and_then(|()| self.s.write_char(b'"')))
+        iomap!(
+            self.s
+                .write_char(b'"')
+                .and_then(|()| self.s.write_int(v))
+                .and_then(|()| self.s.write_char(b'"'))
+        )
     }
 
     fn serialize_f32(self, _v: f32) -> Result<Self::Ok, Self::Error> {
@@ -476,7 +465,7 @@ where
     }
 }
 
-impl<'serializer, W> ser::SerializeStruct for SerializeMap<'serializer, W>
+impl<W> ser::SerializeStruct for SerializeMap<'_, W>
 where
     W: Write,
 {
@@ -497,20 +486,17 @@ where
             iomap!(s.write_simple_string(key).and_then(|()| s.write(b":")))
                 .and_then(|()| value.serialize(&mut **s))
         } else {
-            iomap!(s
-                .write(b",")
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b":")))
+            iomap!(
+                s.write(b",")
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b":"))
+            )
             .and_then(|()| value.serialize(&mut **s))
         }
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        if self.first {
-            Ok(())
-        } else {
-            iomap!(self.s.write(b"}"))
-        }
+        iomap!(self.s.write(b"}"))
     }
 }
 
@@ -519,7 +505,7 @@ struct SerializeStructVariant<'serializer, W: Write + 'serializer> {
     first: bool,
 }
 
-impl<'serializer, W> ser::SerializeStructVariant for SerializeStructVariant<'serializer, W>
+impl<W> ser::SerializeStructVariant for SerializeStructVariant<'_, W>
 where
     W: Write,
 {
@@ -540,22 +526,17 @@ where
             iomap!(s.write_simple_string(key).and_then(|()| s.write(b":")))
                 .and_then(|()| value.serialize(&mut **s))
         } else {
-            iomap!(s
-                .write(b",")
-                .and_then(|()| s.write_simple_string(key))
-                .and_then(|()| s.write(b":")))
+            iomap!(
+                s.write(b",")
+                    .and_then(|()| s.write_simple_string(key))
+                    .and_then(|()| s.write(b":"))
+            )
             .and_then(|()| value.serialize(&mut **s))
         }
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        iomap!(self.s.write(b"}")).and_then(move |()| {
-            if self.first {
-                Ok(())
-            } else {
-                iomap!(self.s.write(b"}"))
-            }
-        })
+        iomap!(self.s.write(b"}}"))
     }
 }
 
@@ -707,21 +688,17 @@ where
     where
         T: ?Sized + serde_ext::Serialize,
     {
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b":")))
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b":"))
+        )
         .and_then(|()| value.serialize(&mut *self))
         .and_then(|()| iomap!(self.write(b"}")))
     }
     #[cfg_attr(not(feature = "no-inline"), inline)]
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        if len == Some(0) {
-            iomap!(self.write(b"[]"))
-        } else {
-            iomap!(self.write(b"["))
-        }
-        .map(move |()| SerializeSeq {
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        iomap!(self.write(b"[")).map(move |()| SerializeSeq {
             s: self,
             first: true,
         })
@@ -749,26 +726,19 @@ where
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b":")))?;
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b":"))
+        )?;
         self.serialize_seq(Some(len))
     }
 
     #[cfg_attr(not(feature = "no-inline"), inline)]
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        let mut wrote_closing = false;
-        if len == Some(0) {
-            wrote_closing = true;
-            iomap!(self.write(b"{}"))
-        } else {
-            iomap!(self.write(b"{"))
-        }
-        .map(move |()| SerializeMap {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        iomap!(self.write(b"{")).map(move |()| SerializeMap {
             s: self,
             first: true,
-            wrote_closing,
         })
     }
 
@@ -787,22 +757,16 @@ where
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        len: usize,
+        _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        iomap!(self
-            .write(b"{")
-            .and_then(|()| self.write_simple_string(variant))
-            .and_then(|()| self.write(b":")))
-        .and_then(move |()| {
-            if len == 0 {
-                iomap!(self.write(b"{}"))
-            } else {
-                iomap!(self.write(b"{"))
-            }
-            .map(move |()| SerializeStructVariant {
-                s: self,
-                first: true,
-            })
+        iomap!(
+            self.write(b"{")
+                .and_then(|()| self.write_simple_string(variant))
+                .and_then(|()| self.write(b":{"))
+        )
+        .map(move |()| SerializeStructVariant {
+            s: self,
+            first: true,
         })
     }
 }
@@ -860,6 +824,36 @@ mod test {
         assert_eq!(
             r#"{"bar":{"1337":1337}}"#,
             crate::to_string(&foo).expect("to_string")
+        );
+    }
+
+    #[test]
+    fn empty_containers_of_unknown_length() {
+        use std::collections::BTreeMap;
+
+        // `collect_seq` over a filter passes `len: None`
+        struct Filtered(Vec<u8>);
+        impl serde::Serialize for Filtered {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.collect_seq(self.0.iter().filter(|x| **x > 10))
+            }
+        }
+        #[derive(serde::Serialize)]
+        struct Flat {
+            #[serde(flatten)]
+            rest: BTreeMap<String, u8>,
+        }
+
+        assert_eq!(
+            crate::to_string(&Filtered(vec![1, 2])).expect("to_string"),
+            "[]"
+        );
+        assert_eq!(
+            crate::to_string(&Flat {
+                rest: BTreeMap::new()
+            })
+            .expect("to_string"),
+            "{}"
         );
     }
 
