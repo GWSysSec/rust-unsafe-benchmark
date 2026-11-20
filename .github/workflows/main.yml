@@ -1,8 +1,8 @@
-name: Benchmark with current Rust
+name: Compatibility with current nightly Rust
 
 on:
   schedule:
-    - cron: '17 8 1 * *'
+    - cron: "17 8 1 * *"
   workflow_dispatch:
 
 permissions:
@@ -19,51 +19,46 @@ jobs:
       matrix:
         include:
           - benchmark: arrayvec
-            channel: stable
+            channel: nightly
           - benchmark: async-task
             channel: nightly
           - benchmark: getrandom
-            channel: stable
+            channel: nightly
           - benchmark: hashbrown
             channel: nightly
           - benchmark: httparse
-            channel: stable
+            channel: nightly
           - benchmark: jni
             channel: nightly
           - benchmark: jpeg-decoder-master
-            channel: stable
+            channel: nightly
           - benchmark: matrixmultiply
-            channel: stable
+            channel: nightly
           - benchmark: memchr
-            channel: stable
+            channel: nightly
           - benchmark: ndarray
             channel: nightly
           - benchmark: parking_lot
-            channel: stable
+            channel: nightly
           - benchmark: petgraph
             channel: nightly
           - benchmark: rayon
-            channel: stable
+            channel: nightly
           - benchmark: semver
             channel: nightly
           - benchmark: simd-json
-            channel: stable
+            channel: nightly
           - benchmark: ring
-            channel: stable
+            channel: nightly
           - benchmark: smallvec
             channel: nightly
           - benchmark: tokio
-            channel: stable
+            channel: nightly
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install latest stable Rust
-        if: matrix.channel == 'stable'
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install latest nightly Rust
-        if: matrix.channel == 'nightly'
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Install Java for JNI benchmarks
@@ -71,7 +66,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Run benchmark suite
         env:
@@ -83,29 +78,25 @@ jobs:
               cargo build --release --locked --manifest-path rebar/Cargo.toml
               cd rebar
               ./target/release/rebar build -e 'rust/memchr/memmem/(prebuilt)'
-              ./target/release/rebar measure -e 'rust/memchr/memmem/(prebuilt)'
               ;;
             rayon)
-              cargo run --release --locked \
-                --manifest-path rayon/rayon-demo/Cargo.toml -- \
-                nbody bench --bodies 500
+              cargo build --release --locked \
+                --manifest-path rayon/rayon-demo/Cargo.toml
               ;;
             jni)
-              cargo bench --locked --features invocation \
+              cargo bench --no-run --locked --features invocation \
                 --manifest-path jni/Cargo.toml
               ;;
             parking_lot)
-              cargo run --release --locked \
-                --manifest-path parking_lot/benchmark/Cargo.toml \
-                --bin mutex -- 2 4 10 2 4
-              cargo run --release --locked \
-                --manifest-path parking_lot/benchmark/Cargo.toml \
-                --bin rwlock -- 4 4 4 10 2 4
+              cargo build --release --locked \
+                --manifest-path parking_lot/benchmark/Cargo.toml
               ;;
             ring)
-              cargo bench --locked --benches --manifest-path ring/Cargo.toml
+              cargo bench --no-run --locked --benches \
+                --manifest-path ring/Cargo.toml
               ;;
             *)
-              cargo bench --locked --manifest-path "$BENCHMARK/Cargo.toml"
+              cargo bench --no-run --locked \
+                --manifest-path "$BENCHMARK/Cargo.toml"
               ;;
           esac
